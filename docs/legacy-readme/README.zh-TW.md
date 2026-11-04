@@ -6,7 +6,7 @@
 
 《城市與地鐵》是一款在瀏覽器中遊玩的單人地鐵規劃與城市經營遊戲。從第一座車站開始，連接住宅區、商圈、校園與機場，跨過江河，逐步織出自己的交通網路。城市隨年代發展，居民也會根據你的路網重新選擇出行方式。
 
-**[線上遊玩](https://city-and-metro.pages.dev)** · [原始碼儲存庫](https://github.com/VinsonFung/city-and-metro) · [使用許可](./LICENSE.txt)
+**[線上遊玩](https://city-and-metro.pages.dev)** · [原始碼儲存庫](https://github.com/VinsonFung/city-and-metro) · [使用許可](../../LICENSE.txt)
 
 ## 維護與社群版本
 
@@ -42,25 +42,25 @@
 
 九張地圖各有簡介、城市特色和分階段年表，地區與年代篩選可左右拖曳。下圖為香港地圖，包含擴展後的離島與機場範圍。
 
-![v2.2 地圖選擇：九圖清單、香港概況與歷史階段年表](./img/screenshot-map-selection.png)
+![v2.2 地圖選擇：九圖清單、香港概況與歷史階段年表](../../img/screenshot-map-selection.png)
 
 ### 東京：從銀座線開始
 
 1950 年開局接管淺草—澀谷之間的銀座線 18 站，在白天的 2D 地圖中觀察街區與既有路網。
 
-![v2.2 東京：1950 年 2D 地圖與開局銀座線](./img/screenshot-tokyo-day.png)
+![v2.2 東京：1950 年 2D 地圖與開局銀座線](../../img/screenshot-tokyo-day.png)
 
 ### 廣州：珠江兩岸的夜景
 
 2.5D 視圖中的建築、江面、地標與地鐵路網。畫面來自遊戲內 2012 年的主選單示範場景，已收起介面。
 
-![v2.2 廣州：珠江兩岸的 2.5D 夜景與示範路網](./img/screenshot-guangzhou-night.png)
+![v2.2 廣州：珠江兩岸的 2.5D 夜景與示範路網](../../img/screenshot-guangzhou-night.png)
 
 ### 從路網看到城市經濟
 
 經濟統計展示 GDP、成長、地方財政與交通效率。下圖使用獨立建立的廣州自由建造示範進度：2000 年開局建成五站路線，再依正常結算推進兩年。圖中開局前的資料來自年代推演，數值均為遊戲模擬結果。
 
-![v2.2 經濟統計：廣州五站示範路線推進兩年後的經濟趨勢](./img/screenshot-economy-statistics.png)
+![v2.2 經濟統計：廣州五站示範路線推進兩年後的經濟趨勢](../../img/screenshot-economy-statistics.png)
 
 ## 城市與開局
 
@@ -103,7 +103,7 @@
 
 ## 本機開發與部署
 
-使用原生 HTML、CSS 和 JavaScript。玩法與驗收要求見 [PRD](./PRD.md)，玩家更新公告見 [js/news.js](./js/news.js)。
+使用原生 HTML、CSS 和 JavaScript。玩法與驗收要求見 [PRD](../../PRD.md)，玩家更新公告見 [js/news.js](../../js/news.js)。
 
 使用 Node.js 建置，產生的 `dist/` 可部署至靜態網站託管服務；社群部署須遵守上面的署名與非商業要求。
 
@@ -124,4 +124,4 @@ node scripts/test-web-sync.mjs
 
 **Copyright © 2026 VinsonFung。保留所有權利，嚴禁商業使用。**
 
-非商業學習、研究、遊玩、修改及分享須遵守 [LICENSE.txt](./LICENSE.txt)。第三方程式碼、資料與資源保留各自授權條款；OpenStreetMap 地理資料遵循 ODbL 1.0，詳見[第三方聲明](./THIRD_PARTY_NOTICES.txt)。
+非商業學習、研究、遊玩、修改及分享須遵守 [LICENSE.txt](../../LICENSE.txt)。第三方程式碼、資料與資源保留各自授權條款；OpenStreetMap 地理資料遵循 ODbL 1.0，詳見[第三方聲明](../../THIRD_PARTY_NOTICES.txt)。
