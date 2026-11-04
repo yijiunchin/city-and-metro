@@ -6,7 +6,7 @@
 
 《城市與地鐵》是一款在瀏覽器中遊玩的單人地鐵規劃與城市經營遊戲。從第一座車站開始，連接住宅區、商圈、校園與機場，跨過江河，逐步織出自己的交通網路。城市隨年代發展，居民也會根據你的路網重新選擇出行方式。
 
-**[線上遊玩](https://city-and-metro.yijiun.com)** · [原版遊戲](https://city-and-metro.pages.dev) · [使用許可](./LICENSE.txt) · [第三方聲明](./THIRD_PARTY_NOTICES.txt)
+**[線上遊玩](https://city-and-metro.yijiun.com)** · [本版原始碼](https://github.com/yijiunchin/city-and-metro) · [原版遊戲](https://city-and-metro.pages.dev) · [使用許可](./LICENSE.txt) · [第三方聲明](./THIRD_PARTY_NOTICES.txt)
 
 > [!IMPORTANT]
 > **這是社群修改版，不是官方版本。**

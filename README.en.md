@@ -6,7 +6,7 @@
 
 City and Metro is a single-player metro planning and city management game that runs in the browser. Start with a single station, connect homes, business districts, campuses and airports, cross rivers, and grow your own transit network. The city develops across the decades, and residents change how they travel as your network evolves.
 
-**[Play online](https://city-and-metro.yijiun.com)** · [Original game](https://city-and-metro.pages.dev) · [License](./LICENSE.txt) · [Third-party notices](./THIRD_PARTY_NOTICES.txt)
+**[Play online](https://city-and-metro.yijiun.com)** · [Source code](https://github.com/yijiunchin/city-and-metro) · [Original game](https://city-and-metro.pages.dev) · [License](./LICENSE.txt) · [Third-party notices](./THIRD_PARTY_NOTICES.txt)
 
 > [!IMPORTANT]
 > **This is a community-modified version, not the official release.**

@@ -2508,3 +2508,4 @@ html.vt-theme *, html.vt-theme *::before, html.vt-theme *::after { transition: n
 .cloud-btn.err::after { background: var(--bad); }
 @keyframes cloudPulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .cloud-btn.busy::after { animation: none; } }
+.start-community a { white-space: nowrap; }

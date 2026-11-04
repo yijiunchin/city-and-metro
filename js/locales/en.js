@@ -4628,5 +4628,14 @@ window.CM.I18N_EN = {
   "浏览器不支持压缩，无法上传存档": "This browser does not support compression, so saves cannot be uploaded",
   "云端存档写入本机后校验失败": "A cloud save failed verification after being written to this device",
   "云端数据已被其他设备更新": "Cloud data was updated by another device",
-  "登录 Google 账号（设置 → 存档 → 云端同步）后，设置与存档会自动在设备间同步并备份；": "After signing in with Google (Settings → Saves → Cloud Sync), settings and saves sync across devices and are backed up; "
+  "登录 Google 账号（设置 → 存档 → 云端同步）后，设置与存档会自动在设备间同步并备份；": "After signing in with Google (Settings → Saves → Cloud Sync), settings and saves sync across devices and are backed up; ",
+  "社群修改版": "Community Edition",
+  "社群修改版 · ": "Community edition · ",
+  "原版：VinsonFung": "Original: VinsonFung",
+  "本版：yijiunchin": "This edition: yijiunchin",
+  "版本 v{v} · 网页版 · 社群修改版": "Version v{v} · Web · Community Edition",
+  "本版是社群修改版，新增 Google 账号登录、云端同步与界面语言自动检测；游戏本体由原作者 VinsonFung 开发与维护，仅限非商业使用。": "This is a community edition that adds Google sign-in, cloud sync and automatic interface language. The game itself is developed and maintained by its original author, VinsonFung, for non-commercial use only.",
+  "原版游戏": "Original Game",
+  "原版 GitHub 仓库": "Original GitHub Repository",
+  "本版 GitHub 仓库": "This Edition's GitHub Repository"
 };
