@@ -1,7 +1,33 @@
 {
   "$schema": "https://unpkg.com/wrangler/config-schema.json",
   "name": "city-and-metro",
-  "pages_build_output_dir": "./dist",
-  "compatibility_date": "2026-10-17"
+  "account_id": "05f3506fbce39765993cba10adb9a70b",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-17",
+  // 游戏本体为静态资源（node scripts/build.mjs 生成 dist/）；只有 /api/* 交给 Worker（登录与云端同步）。
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/api/*"]
+  },
+  "routes": [
+    { "pattern": "city-and-metro.yijiun.com", "custom_domain": true }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "city-and-metro",
+      "database_id": "ef76a895-a4ac-46da-ae10-2d0f238d0755",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "SAVES", "bucket_name": "city-and-metro-saves" }
+  ],
+  // GOOGLE_CLIENT_SECRET 以 `wrangler secret put GOOGLE_CLIENT_SECRET` 设置，不写入仓库。
+  "vars": {
+    "GOOGLE_CLIENT_ID": "438739937858-u24ako91a4kvg01n624mf96b39p4lo7q.apps.googleusercontent.com"
+  },
+  "observability": { "enabled": true }
 }
-

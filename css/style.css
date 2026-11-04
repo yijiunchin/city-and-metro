@@ -2497,3 +2497,14 @@ html.vt-theme *, html.vt-theme *::before, html.vt-theme *::after { transition: n
  .ms2-facts > div { padding: 4px 7px; }
 }
 @media (prefers-reduced-motion: reduce) { .ms2 *, .scr-out, #stagebg, #stagebg .sb-frame { animation: none !important; transition: none !important; } }
+
+/* 云端同步：账号头像与主菜单按钮 */
+.cloud-avatar { flex: none; width: 28px; height: 28px; border-radius: 50%; object-fit: cover; display: block; }
+.cloud-avatar.ph { display: grid; place-items: center; background: var(--line); color: var(--text); }
+.set-ico .cloud-avatar { width: 100%; height: 100%; }
+.cloud-btn .cloud-avatar { width: 26px; height: 26px; position: relative; z-index: 1; }
+.cloud-btn.busy::after, .cloud-btn.err::after { content: ''; position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface-solid); z-index: 2; }
+.cloud-btn.busy::after { background: var(--accent); animation: cloudPulse 1.2s ease-in-out infinite; }
+.cloud-btn.err::after { background: var(--bad); }
+@keyframes cloudPulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .cloud-btn.busy::after { animation: none; } }

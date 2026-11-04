@@ -1,5 +1,5 @@
 'use strict';
-// 本地存档（无账号）：存档数据保存在浏览器 IndexedDB（容量大），不可用时退回 localStorage；
+// 本地存档（登录后由 js/cloud.js 同步到云端）：存档数据保存在浏览器 IndexedDB（容量大），不可用时退回 localStorage；
 // 存档索引保存在 localStorage。支持多进度、自动/手动存档、文件导入导出（格式、版本、校验和检查）。
 (function (CM) {
   const U = CM.U, CFG = CM.CFG;
@@ -70,7 +70,15 @@
       return o;
     } catch (e) { if(strict)throw new Error('存档索引无法读取，已停止改写并保留原数据；请先导出当前进度作为备份。');return emptyIndex(); }
   }
-  function writeIndex(idx) { localStorage.setItem(IDX, JSON.stringify(idx)); }
+  // 云端同步（js/cloud.js）：索引每次提交后通知；删除时记录墓碑，供其他设备合并时一并删除。
+  const TOMB = P + 'cloud.tomb';
+  let quietIndex = false;
+  function writeIndex(idx) {
+    localStorage.setItem(IDX, JSON.stringify(idx));
+    if (!quietIndex && CM.Cloud) CM.Cloud.localChanged('saves');
+  }
+  function readTomb() { try { const t = JSON.parse(localStorage.getItem(TOMB) || '{}'); return t && typeof t === 'object' && !Array.isArray(t) ? t : {}; } catch (e) { return {}; } }
+  function addTomb(slotIds) { try { const t = readTomb(), now = Date.now(); for (const id of slotIds) t[id] = Math.max(now, t[id] || 0); localStorage.setItem(TOMB, JSON.stringify(t)); } catch (e) { /* ignore */ } }
   function errMsg(e) {
     if (!e) return '未知错误';
     if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) return '浏览器本地存储空间不足（可删除旧存档或导出备份后清理）';
@@ -281,6 +289,7 @@
     if (!meta) return;
     delete idx.slots[slotId];
     if (!Object.values(idx.slots).some(function (s) { return s.gameId === meta.gameId; })) delete idx.games[meta.gameId];
+    addTomb([slotId]);
     writeIndex(idx);
     for (const pending of pendingWrites) if (pending.slotId === slotId || (!idx.games[meta.gameId] && pending.gameId === meta.gameId)) pending.cancelled = true;
     store.del(meta.key, meta.store);
@@ -289,6 +298,7 @@
     const idx = readIndex(true), removed=[];
     for (const s of Object.values(idx.slots)) if (s.gameId === gameId) { delete idx.slots[s.slotId]; removed.push(s); }
     delete idx.games[gameId];
+    addTomb(removed.map(function (s) { return s.slotId; }));
     writeIndex(idx);
     for (const pending of pendingWrites) if (pending.gameId === gameId) pending.cancelled = true;
     for(const s of removed)store.del(s.key,s.store);
@@ -297,6 +307,7 @@
     const idx = readIndex(true);
     if (!idx.games[gameId]) return;
     idx.games[gameId].name = name;
+    idx.games[gameId].nameAt = Date.now();
     for (const s of Object.values(idx.slots)) if (s.gameId === gameId) s.name = name;
     writeIndex(idx);
     for (const pending of pendingWrites) if (pending.gameId === gameId) pending.name = name;
@@ -356,6 +367,13 @@
     let n = 0;
     for (const s of Object.values(readIndex().slots)) n += s.size || 0;
     return n;
+  };
+  // 供云端同步使用的内部接口：同步在写入队列中执行，与本地保存串行。
+  Save._cloud = {
+    readIndex: readIndex, store: store, queueWrite: queueWrite,
+    writeIndex: function (idx) { quietIndex = true; try { writeIndex(idx); } finally { quietIndex = false; } },
+    readTomb: readTomb,
+    clearTomb: function (sent) { try { const t = readTomb(); for (const id in sent) if (t[id] <= sent[id]) delete t[id]; localStorage.setItem(TOMB, JSON.stringify(t)); } catch (e) { /* ignore */ } },
   };
   CM.Save = Save;
 })(window.CM);
