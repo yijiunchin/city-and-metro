@@ -3,7 +3,7 @@
 (function (CM) {
   const KEY = 'cm1.settings';
   const DEF = {
-    language: 'zh-CN',    // 仅切换显示语言，不改地图、模拟与存档中的原文
+    language: 'auto',     // auto 跟随浏览器/设备语言；仅切换显示语言，不改地图、模拟与存档中的原文
     lighting: true, // Directional light for Canvas ground and buildings.
     theme: 'auto',        // light | dark | auto（跟随系统）
     uiScale: 1,           // 界面大小
@@ -31,7 +31,7 @@
     }
   } catch (e) { /* 存储不可用时使用默认值 */ }
   cur.colorBlind = cur.colorBlind === true;
-  if (!['zh-CN', 'zh-TW', 'en'].includes(cur.language)) cur.language = 'zh-CN';
+  if (!['auto', 'zh-CN', 'zh-TW', 'en'].includes(cur.language)) cur.language = 'auto';
   const recent = function (v) { return Array.isArray(v) ? v.filter(function (c) { return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c); }).map(function (c) { return c.toLowerCase(); }).filter(function (c, i, a) { return a.indexOf(c) === i; }).slice(0, 8) : []; };
   cur.recentColors = recent(cur.recentColors);
   if (!cur.keys || typeof cur.keys !== 'object' || Array.isArray(cur.keys)) cur.keys = {};
@@ -45,7 +45,7 @@
     get: function (k) { return cur[k]; },
     all: function () { return Object.assign({}, cur); },
     set: function (k, v) {
-      if (k === 'language' && !['zh-CN', 'zh-TW', 'en'].includes(v)) v = 'zh-CN';
+      if (k === 'language' && !['auto', 'zh-CN', 'zh-TW', 'en'].includes(v)) v = 'auto';
       if (k === 'colorBlind') v = v === true;
       if (k === 'recentColors') v = recent(v);
       if (cur[k] === v) return;

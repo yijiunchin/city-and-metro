@@ -3,7 +3,17 @@
 (function(CM){
   const allowed=['zh-CN','zh-TW','en'],hasHan=s=>/[\u3400-\u9fff]/.test(s),cache=new Map(),sources=new WeakMap(),attrs=new WeakMap(),listeners=new Set();
   let language='zh-CN',traditional=null,namesReady=false,trie=null,templates=null;
-  try{const s=JSON.parse(localStorage.getItem('cm1.settings')||'null');if(s&&allowed.includes(s.language))language=s.language;}catch(e){/* settings unavailable */}
+  // 「跟随系统」（auto）：按浏览器或设备的语言偏好依次匹配；繁体地区（台湾、香港、澳门或 Hant）用繁体，其他中文用简体，非中文用英语。
+  function detect(){
+    const list=(typeof navigator!=='undefined'&&(navigator.languages&&navigator.languages.length?navigator.languages:[navigator.language]))||[];
+    for(const raw of list){const l=String(raw||'').toLowerCase();if(!l)continue;
+      if(/^zh(-|$)/.test(l))return /hant|-(tw|hk|mo)\b/.test(l)?'zh-TW':'zh-CN';
+      if(/^en(-|$)/.test(l))return 'en';}
+    return 'en';
+  }
+  let wanted='auto';
+  try{const s=JSON.parse(localStorage.getItem('cm1.settings')||'null');if(s&&allowed.includes(s.language))wanted=s.language;}catch(e){/* settings unavailable */}
+  language=wanted==='auto'?detect():wanted;
   const en=CM.I18N_EN||Object.create(null),names=new Map(),nameLengths=new Map(),missing=new Set();
   const compactFormat=new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:2});
   function sanitize(s){return s.replace(/笕桥机场(?:[（(]军用[）)])?/g,'城东片区').replace(/王家墩机场(?:[（(]军用[）)])?/g,'王家墩片区').replace(/军用机场[^，。；\n]*/g,'未开发用地');}
@@ -84,11 +94,11 @@
     if(CM.Stats&&CM.Stats.isOpen())CM.Stats.redraw();if(CM.NetMap)CM.NetMap.refresh(true);
   }
   function apply(next){
-    if(!allowed.includes(next))next='zh-CN';language=next;cache.clear();
+    wanted=next==='auto'||!allowed.includes(next)?'auto':next;next=wanted==='auto'?detect():next;language=next;cache.clear();
     if(typeof document==='undefined')return;document.documentElement.lang=language;document.documentElement.dataset.language=language;
     localize(document.body);document.title=text('城市与地铁');invalidate();for(const f of listeners)f(language);
   }
-  CM.I18n={text,get:()=>language,apply,localize,name:nameEnglish,search:s=>(String(s)+' '+text(String(s))).toLowerCase(),on(fn){listeners.add(fn);return()=>listeners.delete(fn);},missing:()=>[...missing]};
+  CM.I18n={text,get:()=>language,detect,apply,localize,name:nameEnglish,search:s=>(String(s)+' '+text(String(s))).toLowerCase(),on(fn){listeners.add(fn);return()=>listeners.delete(fn);},missing:()=>[...missing]};
   if(typeof document==='undefined')return;
   // Translate newly constructed controls before callers measure or attach them.
   const h=CM.U.h;CM.U.h=function(){const el=h.apply(this,arguments);localize(el);return el;};
@@ -97,5 +107,6 @@
   // Observe changed nodes only; source text is retained so switching back never translates a translation.
   const observer=new MutationObserver(records=>{observer.disconnect();for(const r of records){if(r.type==='characterData')node(r.target);else if(r.type==='attributes')element(r.target);else for(const n of r.addedNodes)localize(n);}observe();});
   function observe(){observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:attrKeys});}
-  apply(language);observe();
+  apply(wanted);observe();
+  if(typeof window!=='undefined')window.addEventListener('languagechange',()=>{if(wanted==='auto'&&detect()!==language)apply('auto');});
 })(window.CM);

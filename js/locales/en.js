@@ -66,6 +66,7 @@ window.CM.I18N_EN = {
   "繁体中文": "繁體中文",
   "English": "English",
   "切换后立即生效，下次启动保留此选择": "Applies immediately and is remembered next time.",
+  "默认跟随浏览器或设备的语言；切换后立即生效，下次启动保留此选择": "Follows your browser or device language by default. Changes apply immediately and are remembered next time.",
   "开始游戏": "New Game",
   "继续游戏": "Continue",
   "选择城市与模式": "Choose a city and mode",

@@ -1995,7 +1995,7 @@
     const pages = {
       display: function () {
         return [group('显示')].concat(extra('display'), [
-          row('label', '界面语言', seg('language', [['zh-CN', '简体中文'], ['zh-TW', '繁体中文'], ['en', 'English']]), '切换后立即生效，下次启动保留此选择'),
+          row('label', '界面语言', seg('language', [['auto', '跟随系统'], ['zh-CN', '简体中文'], ['zh-TW', '繁体中文'], ['en', 'English']]), '默认跟随浏览器或设备的语言；切换后立即生效，下次启动保留此选择'),
           row('sun', '主题', seg('theme', [['light', '浅色', 'sun'], ['dark', '深色', 'moon'], ['auto', '跟随系统']], function () { self.renderThemeBtns(); })),
           row('expand', '界面大小', seg('uiScale', [[0.9, '小'], [1, '标准'], [1.15, '大']])),
           group('地图'),
