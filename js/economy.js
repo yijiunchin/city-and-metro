@@ -477,6 +477,36 @@
     return { vol: vol, share: vol > 0 ? m / vol : 0 };
   };
 
+  // 连接任务的锚点：半径内至少有一格已成陆、可以建设的土地，才可能在此设站。
+  // 锚点所在片区尚未开放（或填海尚未成陆）时，本城任务暂不发布；已发布的撤回，不奖不罚，片区开放后重新发布
+  Tasks.anchorReachable = function (city, a) {
+    const r = a.r || 0;
+    for (let j = Math.floor(a.y - r); j <= Math.floor(a.y + r); j++) for (let i = Math.floor(a.x - r); i <= Math.floor(a.x + r); i++) {
+      const c = city.cellAt(i + 0.5, j + 0.5);
+      if (c < 0 || Math.hypot(i + 0.5 - a.x, j + 0.5 - a.y) > Math.max(r, 0.71)) continue;
+      if (city.landFrac[c] >= 0.5 && !city.cellLocked(c)) return true;
+    }
+    return false;
+  };
+  Tasks.blockedAnchors = function (city, t) {
+    if (t.type !== 'connect' || !t.anchors || !city) return [];
+    return t.anchors.filter(function (a) { return !Tasks.anchorReachable(city, a); });
+  };
+  Tasks.prototype.withdrawBlocked = function (g) {
+    const out = [], y = g.clock.y, m = g.clock.m;
+    for (const t of this.active.slice()) {
+      if (t.kind !== 'dyn' || !t.cityId) continue;
+      const bad = Tasks.blockedAnchors(g.city, t); if (!bad.length) continue;
+      t.status = 'withdrawn'; t.closedAt = [y, m];
+      t.withdrawReason = '「' + bad.map(function (a) { return a.name; }).join('、') + '」一带尚未开放建设';
+      this.active.splice(this.active.indexOf(t), 1);
+      delete this.issued['dyn:' + t.cityId];   // 片区开放后可以重新发布
+      this.adjusted = (this.adjusted || []).concat([t]).slice(-60);
+      out.push({ type: 'withdrawn', task: t });
+    }
+    return out;
+  };
+
   Tasks.prototype.evaluate = function (t, g) {
     const C = g.compiled, model = g.model, acc = model.net ? model.net.acc : null;
     if (t.type === 'connect') {
@@ -612,6 +642,7 @@
       if (t) { this.active.push(t); out.push({ type: 'issued', task: t }); }
       this.nextDyn = ym + 6;
     }
+    for (const o of this.withdrawBlocked(g)) out.push(o);
     // 评估。交通模型升级过渡期（旧存档升级当月）：未达标时不清零连续月数，到期任务顺延 1 个月，不判失败
     const transit = g.inTransition ? g.inTransition(ym) : false;
     for (const t of this.active.slice()) {
@@ -757,7 +788,7 @@
     // 本城专属动态任务（D.dynTasks）：在年份窗口内各发布一次，已满足的不发布
     const self = this;
     for (const tp of (D.dynTasks || []).concat(CM.Eras ? CM.Eras.goals() : [])) {   // v2.2：历史阶段目标同样作为本城任务，在阶段时间内发布
-      if (this.issued['dyn:' + tp.id] || ym < U.ymIndex(tp.from[0], tp.from[1]) || ym > U.ymIndex(tp.to[0], tp.to[1]) || !free('city:' + tp.id, tp.type)) continue;
+      if (this.issued['dyn:' + tp.id] || ym < U.ymIndex(tp.from[0], tp.from[1]) || ym > U.ymIndex(tp.to[0], tp.to[1]) || !free('city:' + tp.id, tp.type) || Tasks.blockedAnchors(city, tp).length) continue;
       const c = Object.assign({ coolKey: 'city:' + tp.id, cityId: tp.id }, JSON.parse(JSON.stringify(tp)), { reward: tp.reward * ci });
       delete c.from; delete c.to; delete c.id;
       if (this.evaluate(c, g).ok) continue;

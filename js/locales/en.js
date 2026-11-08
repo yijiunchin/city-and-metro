@@ -4637,5 +4637,9 @@ window.CM.I18N_EN = {
   "本版是社群修改版，新增 Google 账号登录、云端同步与界面语言自动检测；游戏本体由原作者 VinsonFung 开发与维护，仅限非商业使用。": "This is a community edition that adds Google sign-in, cloud sync and automatic interface language. The game itself is developed and maintained by its original author, VinsonFung, for non-commercial use only.",
   "原版游戏": "Original Game",
   "原版 GitHub 仓库": "Original GitHub Repository",
-  "本版 GitHub 仓库": "This Edition's GitHub Repository"
+  "本版 GitHub 仓库": "This Edition's GitHub Repository",
+  "任务撤回：": "Task Withdrawn: ",
+  "」一带尚未开放建设": "” area is not yet open for construction",
+  "，任务撤回，不扣除拨款、不降低满意度；该片区开放后会重新发布。": ". The task was withdrawn without reducing grants or satisfaction and will be reissued once the area opens.",
+  "以下任务的目标地点尚未开放建设，已撤回且不扣除拨款、不降低满意度，片区开放后重新发布：": "These tasks target places not yet open for construction. They were withdrawn without reducing grants or satisfaction and will be reissued once the areas open: "
 };

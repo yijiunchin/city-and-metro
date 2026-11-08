@@ -204,6 +204,7 @@
     if (o.type === 'issued') { this.logEvent({ tag: '任务', title: '新任务：' + t.title, desc: t.desc }); this.emit('toast', { kind: 'info', text: '新任务：' + t.title }); }
     else if (o.type === 'done') { this.logEvent({ tag: '任务', title: '任务完成：' + t.title, desc: this.econ.mode === 'challenge' ? '获得奖励拨款 ' + U.fmtMoney(t.reward) : '' }); this.emit('toast', { kind: 'good', text: '任务完成：' + t.title }); }
     else if (o.type === 'failed') { this.logEvent({ tag: '任务', title: '任务未完成：' + t.title, desc: this.econ.mode === 'challenge' ? '后果：未来 ' + CFG.economy.failGrantMonths + ' 个月（含本月）拨款 ×' + CFG.economy.failGrantFactor + '，满意度下降' : '自由建造模式下无后果' }); this.emit('toast', { kind: 'bad', text: '任务未完成：' + t.title }); }
+    else if (o.type === 'withdrawn') this.logEvent({ tag: '任务', title: '任务撤回：' + t.title, desc: t.withdrawReason + '，任务撤回，不扣除拨款、不降低满意度；该片区开放后会重新发布。' });
   };
 
   // ---------------- 时钟 ----------------
@@ -707,6 +708,8 @@
       g.mapInit = s.mapInit || null;
       g.unlockAll = !!s.unlockAll && g.mode === 'free'; g.city.unlockAll = g.unlockAll;
       const kept = g.city.keepLegacyOpen(g.net, g.tasks, g.clock.y, g.clock.m).map(k => g.city.regions[k].name).join('、');
+      // 旧存档修复：已发布、但锚点所在片区尚未开放的本城任务撤回（不奖不罚），片区开放后重新发布
+      g.tasks.withdrawBlocked(g).forEach(o => g.logTask(o));
       g.startYear = s.startYear || null; g.eraLog = s.eraLog || null;
       g.eraBase = s.eraBase || null; g.startBase = s.startBase || null;
       g.taskRecheckYM = s.taskRecheckYM ?? null;

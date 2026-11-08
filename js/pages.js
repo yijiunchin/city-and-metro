@@ -1709,7 +1709,12 @@
       if (!arr.length) body.appendChild(h('div', { class: 'tk-empty' }, CM.icon(tab === 'done' ? 'trophy' : 'flag', 26), h('b', null, tab === 'done' ? '还没有完成的任务' : '没有未完成的任务'), h('span', null, tab === 'done' ? '完成任务可获得奖励拨款与满意度。' : '到期未达成的任务会列在这里。')));
       for (const t of arr) body.appendChild(closedRow(t));
     }
-    if (T.adjusted && T.adjusted.length) body.appendChild(this.sec('tk-adjusted', '已调整的旧目标', T.adjusted.length + ' 项', function () { return h('div', { class: 'note' }, '以下旧目标不具备地铁可改善条件，已撤销且不扣除拨款、不降低满意度：' + T.adjusted.map(t => t.title).join('；')); }, false));
+    if (T.adjusted && T.adjusted.length) body.appendChild(this.sec('tk-adjusted', '已调整的旧目标', T.adjusted.length + ' 项', function () {
+      const wd = T.adjusted.filter(t => t.withdrawReason), old = T.adjusted.filter(t => !t.withdrawReason);
+      return h('div', null,
+        old.length ? h('div', { class: 'note' }, '以下旧目标不具备地铁可改善条件，已撤销且不扣除拨款、不降低满意度：' + old.map(t => t.title).join('；')) : null,
+        wd.length ? h('div', { class: 'note' }, '以下任务的目标地点尚未开放建设，已撤回且不扣除拨款、不降低满意度，片区开放后重新发布：' + wd.map(t => t.title + '（' + t.withdrawReason + '）').join('；')) : null);
+    }, false));
     body.appendChild(this.sec('tk-rule', '任务说明', '', function () { return h('div', { class: 'note' }, (D.taskNote || '历史参考任务参考本城的发展需求，但不要求按真实线路走向建设，只需满足目标描述。') + '动态任务根据当前拥堵、覆盖、车站拥挤与客流情况生成。进度每月初评估；交通目标接近奖惩门槛时复核，仍有波动时保留进度并顺延到期评估；单个任务失败不会直接结束游戏。'); }, false, 'info'));
     return { title: '任务', el: el };
   };
