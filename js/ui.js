@@ -1060,7 +1060,7 @@
     this.renderToolbar();
     this.toast(on ? '已开启高峰慢放：工作日 7–9 时与 17–19 时自动按 1× 运行，便于观察高峰运营；高峰结束后恢复所选速度' : '已关闭高峰慢放：全天按所选速度运行', 'info');
   };
-  UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); this.renderToolbar(); };
+  UI.prototype.setView = function (iso) { if (this.R.cam.view !== (iso ? 1 : 0)) snd('swoosh'); this.R.setView(iso); CM.Settings.set('view3d', !!iso); this.renderToolbar(); };   // 记住 2D / 2.5D，读档与开新地图沿用
   UI.prototype.resetView = function () { this.R.fitAllSmooth(); snd('swoosh'); };
   UI.prototype.toggleView = function () { this.setView(this.R.cam.view !== 1); };
   UI.prototype.toggleUnder = function () { snd('swoosh'); this.R.setUnder(this.R.cam.tu !== 1); this.renderToolbar(); };

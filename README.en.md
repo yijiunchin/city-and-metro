@@ -44,7 +44,7 @@ City and Metro is a single-player metro planning and city management game that r
 | --- | --- |
 | **Sign in with Google** | Optional. Without signing in, the game behaves exactly like the original and stays fully local. |
 | **Cross-device cloud sync** | Once signed in, all settings and every save sync automatically across computers, phones and browsers, and are backed up to the cloud. |
-| **Remembered game preferences** | Remembers your last game speed (e.g. 24×) and which panel sections you expanded; after a reload, loading a save or starting a new map, Resume uses that speed. Synced with your settings when signed in. |
+| **Remembered game preferences** | Remembers your last game speed (e.g. 24×), 2D/2.5D view and which panel sections you expanded; after a reload, loading a save or starting a new map, Resume uses that speed. Synced with your settings when signed in. |
 | **Automatic interface language** | Shows Traditional Chinese, Simplified Chinese or English based on your browser or device language by default; you can still pick one manually. |
 | **Cloudflare Workers deployment** | Moved from Cloudflare Pages to Workers (static assets + API) with D1 and R2, served at `city-and-metro.yijiun.com`. |
 
@@ -140,7 +140,7 @@ Recent versions of Chrome, Edge, Firefox and Safari are recommended.
 
 | Data | Synced | Notes |
 | --- | --- | --- |
-| All settings | ✅ | Language, theme, UI size, volumes, map labels, autosave, key bindings, recent line colors, game speed, expanded panel sections and more |
+| All settings | ✅ | Language, theme, UI size, volumes, map labels, autosave, key bindings, recent line colors, game speed, 2D/2.5D view, expanded panel sections and more |
 | Autosaves | ✅ | Both autosave slots of every game |
 | Manual saves | ✅ | Including imported saves |
 | Pre-upgrade backups | ✅ | Original copies kept automatically when old saves are upgraded |

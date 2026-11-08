@@ -24,6 +24,7 @@
     lineTags: false, taskPins: false,
     speed: 1,             // 上次选用的运行倍速档位（1–4）；继续游戏、读档与新开局沿用（本修改版）
     panelOpen: {},        // 详情与统计面板中各折叠区块的展开状态（本修改版）
+    view3d: true,         // 进入地图时的视角：true 2.5D | false 2D（本修改版）
   };
   let cur = Object.assign({}, DEF);
   try {
@@ -53,6 +54,7 @@
     return o;
   };
   cur.speed = speedOk(cur.speed);
+  cur.view3d = cur.view3d !== false;
   cur.panelOpen = openMap(cur.panelOpen);
   if (!cur.keys || typeof cur.keys !== 'object' || Array.isArray(cur.keys)) cur.keys = {};
   const subs = [];
@@ -67,6 +69,7 @@
     set: function (k, v) {
       if (k === 'language' && !['auto', 'zh-CN', 'zh-TW', 'en'].includes(v)) v = 'auto';
       if (k === 'colorBlind' || k === 'immersive') v = v === true;
+      if (k === 'view3d') v = v !== false;
       if (k === 'recentColors') v = recent(v);
       if (k === 'speed') v = speedOk(v);
       if (k === 'panelOpen') v = openMap(v);
