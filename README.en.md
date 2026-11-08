@@ -374,6 +374,14 @@ curl https://<your-domain>/api/me
 
 ### Later updates
 
+Pushing to `main` runs GitHub Actions (`.github/workflows/deploy.yml`), which tests, builds, applies D1 migrations and deploys automatically. Before the first run, create a Cloudflare API token from the "Edit Cloudflare Workers" template and add the **D1:Edit** permission, then store it as a repository secret:
+
+```sh
+gh secret set CLOUDFLARE_API_TOKEN
+```
+
+You can also run "Deploy" manually from the Actions tab. To deploy by hand:
+
 ```sh
 node scripts/build.mjs && npx wrangler deploy
 ```

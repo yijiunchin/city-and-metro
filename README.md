@@ -374,6 +374,14 @@ curl https://<你的網域>/api/me
 
 ### 之後更新
 
+push 到 `main` 時，GitHub Actions（`.github/workflows/deploy.yml`）會自動執行測試、建置、套用 D1 遷移並部署。首次使用前，需在 Cloudflare 以「Edit Cloudflare Workers」範本建立 API Token，並額外加上 **D1:Edit** 權限，再存成儲存庫 secret：
+
+```sh
+gh secret set CLOUDFLARE_API_TOKEN
+```
+
+也可以在 Actions 頁面手動執行「Deploy」。需要手動部署時：
+
 ```sh
 node scripts/build.mjs && npx wrangler deploy
 ```
