@@ -25,6 +25,22 @@
     if (seg.a === sid) return pts.length ? pts[0] : [net.stations[seg.b].x, net.stations[seg.b].y];
     return pts.length ? pts[pts.length - 1] : [net.stations[seg.a].x, net.stations[seg.a].y];
   };
+  // 车站 → 相连区段、线路 → 区段与线路走向的索引（v2.3 高密度线网性能，v2.6 加线路）：整网批量计算（合法性检查、编译、线路图与管理界面）期间临时建立，
+  // 查询不必遍历全网（数百座车站时检查从 O(区段²) 降为 O(区段)）。只用于不修改线网的计算，结束即丢弃
+  const segIdx = new Map(), NO_SEGS = [];
+  M.withSegIndex = function (nets, fn) {
+    const added = [];
+    for (const net of nets) if (net && !segIdx.has(net)) {
+      const at = new Map(), byLine = new Map(), put = function (sid, s) { let l = at.get(sid); if (!l) at.set(sid, l = []); l.push(s); };
+      for (const id in net.segments) {
+        const s = net.segments[id]; put(s.a, s); if (s.b !== s.a) put(s.b, s);
+        let l = byLine.get(s.line); if (!l) byLine.set(s.line, l = []); l.push(s);
+      }
+      segIdx.set(net, { at: at, byLine: byLine, topo: new Map() }); added.push(net);
+    }
+    try { return fn(); } finally { for (const n of added) segIdx.delete(n); }
+  };
+  M.segsAt = function (net, sid) { const m = segIdx.get(net); return m ? (m.at.get(sid) || NO_SEGS) : null; };
   // 同一线路在车站处的连续方向：取本段方向与“最顺直”的另一段方向的角平分线，使线路平顺穿过车站。
   // 玩家设定了本线站台方向（pd[线路]，弧度，v2.1）时按设定方向，朝向本段一侧
   M.stationTangent = function (net, seg, sid) {
@@ -33,10 +49,22 @@
     let dx = own[0] - S.x, dy = own[1] - S.y;
     const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
     const pd = S.pd && S.pd[seg.line];
-    if (pd != null && isFinite(pd)) { const c = Math.cos(pd), s = Math.sin(pd); return c * dx + s * dy >= 0 ? [c, s] : [-c, -s]; }
+    const near = M.segsAt(net, sid), cand = near || net.segments;
+    if (pd != null && isFinite(pd)) {
+      const c = Math.cos(pd), s = Math.sin(pd), md = c * dx + s * dy;
+      let sg = md >= 0 ? 1 : -1;
+      // 本站只有另一段同线区段时，两段要从站台两端分别出去（v2.6.1）：转向超过 90° 时按方向判断会选到同一端，新线会沿着旧线折返。与站台夹角大的一段让到另一端
+      let other = null, n = 0;
+      for (const id in cand) { const o = cand[id]; if (o !== seg && o.line === seg.line && (o.a === sid || o.b === sid)) { other = o; n++; } }
+      if (n === 1) {
+        const p = M.adjCtrl(net, other, sid), ol = Math.hypot(p[0] - S.x, p[1] - S.y) || 1, od = (c * (p[0] - S.x) + s * (p[1] - S.y)) / ol;
+        if ((od >= 0) === (md >= 0) && (Math.abs(md) < Math.abs(od) || (Math.abs(md) === Math.abs(od) && String(seg.id) > String(other.id)))) sg = -sg;
+      }
+      return [c * sg, s * sg];
+    }
     let best = null, bestDot = 2;
-    for (const id in net.segments) {
-      const o = net.segments[id];
+    for (const id in cand) {
+      const o = cand[id];
       if (o === seg || o.line !== seg.line || (o.a !== sid && o.b !== sid)) continue;
       const p = M.adjCtrl(net, o, sid);
       let ox = p[0] - S.x, oy = p[1] - S.y;
@@ -61,6 +89,7 @@
     const ctrl = [A, [A[0] + tA[0] * Lp, A[1] + tA[1] * Lp]].concat(seg.pts || [], [[B[0] + tB[0] * Lp, B[1] + tB[1] * Lp], B]);
     ctrl.plat = true;
     if (seg.curve === 'smooth') ctrl.smooth = true;
+    else if (seg.curve === 'arc') ctrl.arc = true;
     return ctrl;
   };
   // 平滑曲线（v2.1 玩家反馈）：转弯点作为控制柄（夹紧的均匀三次 B 样条），曲线不必逐点穿过转弯点，一个控制柄即可画出圆顺的大半径弯道；
@@ -138,12 +167,93 @@
     return out;
   }
   M.trackCurve = trackCurve;
+  // 圆弧线形（v2.6.1 玩家反馈：曲线容易冲突、很难调整）：轨道只由直线和圆弧组成，转弯点是相邻两段直线的交点，曲线切过它而不穿过它，半径自动取放得下的最大值；
+  // 没有转弯点时用两段相切的圆弧连接两端站台。同样的车站和转弯点，半径约为原来的 1.2–3 倍（实测：三站转向 1.2–1.6 倍，单个转弯点 2.2–3 倍）。返回的采样点带 spanStart 与 arcs（各段圆弧的中点与半径）
+  const arcUnit = function (x, y) { const l = Math.hypot(x, y) || 1; return [x / l, y / l]; };
+  const arcLine = function (out, A, B, step) { const L = U.dist(A[0], A[1], B[0], B[1]); if (L < 1e-6) return; const k = Math.max(1, Math.ceil(L / step)); for (let j = 1; j <= k; j++) out.push([A[0] + (B[0] - A[0]) * j / k, A[1] + (B[1] - A[1]) * j / k]); };
+  // 从 A 沿切线 tA 走圆弧到 B，返回终点切线
+  function arcTo(out, A, tA, B, step, arcs) {
+    const cx = B[0] - A[0], cy = B[1] - A[1], c2 = cx * cx + cy * cy;
+    if (c2 < 1e-12) return tA;
+    const cr = tA[0] * cy - tA[1] * cx, dot = tA[0] * cx + tA[1] * cy, L = Math.sqrt(c2);
+    if (Math.abs(cr) < 1e-4 * L) { arcLine(out, A, B, step); return arcUnit(cx, cy); }
+    const R = c2 / (2 * Math.abs(cr)), sg = cr > 0 ? 1 : -1, ox = A[0] - tA[1] * sg * R, oy = A[1] + tA[0] * sg * R;
+    const sweep = 2 * Math.atan2(Math.abs(cr), dot), k = Math.max(2, Math.ceil(R * sweep / step)), a0 = Math.atan2(A[1] - oy, A[0] - ox);
+    for (let j = 1; j <= k; j++) { const a = a0 + sg * sweep * j / k; out.push([ox + R * Math.cos(a), oy + R * Math.sin(a)]); }
+    if (arcs) { const am = a0 + sg * sweep / 2; arcs.push({ x: ox + R * Math.cos(am), y: oy + R * Math.sin(am), r: R }); }
+    const ae = a0 + sg * sweep;
+    return [-Math.sin(ae) * sg, Math.cos(ae) * sg];
+  }
+  // 两段相切的圆弧连接两个位姿，取两段中较小半径最大的方案；放不下时返回 null
+  function biarc(Ps, ts, Pe, te) {
+    const vx = Pe[0] - Ps[0], vy = Pe[1] - Ps[1], v2 = vx * vx + vy * vy, L = Math.sqrt(v2);
+    if (L < 1e-6) return null;
+    const dts = vx * ts[0] + vy * ts[1], dte = vx * te[0] + vy * te[1], tt = ts[0] * te[0] + ts[1] * te[1];
+    const ang = function (a, b) { return Math.atan2(Math.abs(a[0] * b[1] - a[1] * b[0]), a[0] * b[0] + a[1] * b[1]); };
+    let best = null;
+    const tryD = function (d1) {
+      const den = 2 * (dte + d1 * (1 - tt)); if (Math.abs(den) < 1e-9) return;
+      const d2 = (v2 - 2 * d1 * dts) / den; if (!(d2 > 1e-4)) return;
+      const ux = vx - d1 * ts[0] - d2 * te[0], uy = vy - d1 * ts[1] - d2 * te[1], ul = Math.hypot(ux, uy); if (ul < 1e-6) return;
+      const a = [ux / ul, uy / ul], th1 = ang(ts, a), th2 = ang(a, te); if (th1 > 2.6 || th2 > 2.6) return;
+      const r = Math.min(th1 < 1e-3 ? 1e9 : d1 / Math.tan(th1 / 2), th2 < 1e-3 ? 1e9 : d2 / Math.tan(th2 / 2));
+      if (!best || r > best.r) best = { r: r, d1: d1, J: [Ps[0] + ts[0] * d1 + a[0] * d1, Ps[1] + ts[1] * d1 + a[1] * d1] };
+    };
+    for (const f of [0.04, 0.07, 0.1, 0.14, 0.18, 0.23, 0.28, 0.34, 0.4, 0.5, 0.62, 0.78, 1, 1.3]) tryD(f * L);
+    if (best) { let w = best.d1 * 0.2; for (let i = 0; i < 6; i++) { const c = best.d1; tryD(c - w); tryD(c + w); w *= 0.55; } }
+    return best;
+  }
+  // 连接两个位姿：同向共线时为直线，否则两段圆弧；返回终点切线，放不下时返回 null
+  function connectPose(out, Ps, ts, Pe, te, step, arcs) {
+    const vx = Pe[0] - Ps[0], vy = Pe[1] - Ps[1], L = Math.hypot(vx, vy);
+    if (L < 1e-6) return ts;
+    if (ts[0] * te[0] + ts[1] * te[1] > 0.99999 && Math.abs(vx * ts[1] - vy * ts[0]) < 1e-3 * L && vx * ts[0] + vy * ts[1] > 0) { arcLine(out, Ps, Pe, step); return te; }
+    const b = biarc(Ps, ts, Pe, te); if (!b) return null;
+    const tJ = arcTo(out, Ps, ts, b.J, step, arcs);
+    arcTo(out, b.J, tJ, Pe, step, arcs);
+    return te;
+  }
+  function arcCurve(ctrl, step) {
+    const n = ctrl.length, P1 = ctrl[1], Pe = ctrl[n - 2], inner = ctrl.slice(2, n - 2), ts = arcUnit(P1[0] - ctrl[0][0], P1[1] - ctrl[0][1]), te = arcUnit(ctrl[n - 1][0] - Pe[0], ctrl[n - 1][1] - Pe[1]);
+    const out = [[ctrl[0][0], ctrl[0][1]]], arcs = [], spanStart = [0];
+    arcLine(out, ctrl[0], P1, step); spanStart.push(out.length - 1);
+    if (!inner.length) { if (!connectPose(out, P1, ts, Pe, te, step, arcs)) return null; }
+    else {
+      // 折线（站台端 → 转弯点 → 站台端）逐点倒圆角：先按统一半径分配各段直线，再让每个转弯点取到放得下的最大半径
+      const V = [P1].concat(inner, [Pe]), m = inner.length, dir = [], Ln = [], tanH = [0];
+      for (let i = 0; i + 1 < V.length; i++) { const dx = V[i + 1][0] - V[i][0], dy = V[i + 1][1] - V[i][1]; Ln.push(Math.hypot(dx, dy)); dir.push(arcUnit(dx, dy)); }
+      for (let k = 1; k <= m; k++) tanH.push(Math.tan(Math.atan2(Math.abs(dir[k - 1][0] * dir[k][1] - dir[k - 1][1] * dir[k][0]), dir[k - 1][0] * dir[k][0] + dir[k - 1][1] * dir[k][1]) / 2));
+      tanH.push(0);
+      const misS = ts[0] * dir[0][0] + ts[1] * dir[0][1] < 0.9988, misE = te[0] * dir[m][0] + te[1] * dir[m][1] < 0.9988;   // 站台方向与第一、最后一段不同向（约 2.8° 以上）：留出过渡
+      const cap0 = misS ? 0.55 : 1, cap1 = misE ? 0.55 : 1;
+      let R = Infinity;
+      for (let i = 0; i <= m; i++) { const a = tanH[i], b = tanH[i + 1], L = Ln[i] * (i === 0 ? cap0 : i === m ? cap1 : 1); if (a + b > 1e-6) R = Math.min(R, L / (a + b)); }
+      if (!isFinite(R)) R = 0;
+      const T = tanH.map(function (t) { return t * R; });
+      for (let k = 1; k <= m; k++) if (tanH[k] > 1e-4) T[k] = Math.max(T[k], Math.min(k === 1 ? Ln[0] * cap0 : Ln[k - 1] - T[k - 1], k === m ? Ln[m] * cap1 : Ln[k] - T[k + 1]));
+      let cur = P1, curT = ts;
+      for (let k = 1; k <= m; k++) {
+        const H = inner[k - 1], d0 = dir[k - 1], d1 = dir[k], a = [H[0] - d0[0] * T[k], H[1] - d0[1] * T[k]], b = [H[0] + d1[0] * T[k], H[1] + d1[1] * T[k]];
+        if (k === 1 && misS) { if (!connectPose(out, cur, curT, a, d0, step, arcs)) arcLine(out, cur, a, step); } else arcLine(out, cur, a, step);
+        const i0 = out.length - 1;
+        if (T[k] > 1e-5) arcTo(out, a, d0, b, step, arcs);
+        spanStart.push(Math.round((i0 + out.length - 1) / 2));
+        cur = b; curT = d1;
+      }
+      if (misE) { if (!connectPose(out, cur, curT, Pe, te, step, arcs)) arcLine(out, cur, Pe, step); } else arcLine(out, cur, Pe, step);
+    }
+    spanStart.push(out.length - 1);
+    arcLine(out, Pe, ctrl[n - 1], step);
+    spanStart.push(out.length - 1);
+    out.spanStart = spanStart; out.arcs = arcs;
+    return out;
+  }
   M.geomFromControl = function (ctrl, type, city) {
-    // 缓存键含城市实例（地图）与地形阶段（填海），同坐标不同地图或不同年代地形不会互相复用
-    const key = type + '|' + (city.uid || 0) + ':' + city.version + ':' + (city.terrainVer || 0) + '|' + (ctrl.plat ? 'p|' : '') + (ctrl.smooth ? 's|' : '') + ctrl.map(function (p) { return p[0].toFixed(3) + ',' + p[1].toFixed(3); }).join(';');
+    // 缓存键含城市实例（地图）、几何相关数据的版本、地形阶段（填海）与可建设范围（区域开放、全图解锁）；月度增长不改变线路几何，不必每月重算
+    const key = type + '|' + (city.uid || 0) + ':' + (city.geoVer || 0) + ':' + (city.terrainVer || 0) + ':' + (city.lockVer || 0) + (city.unlockAll ? 'u' : '') + '|' + (ctrl.plat ? 'p|' : '') + (ctrl.smooth ? 's|' : '') + (ctrl.arc ? 'a|' : '') + ctrl.map(function (p) { return p[0].toFixed(3) + ',' + p[1].toFixed(3); }).join(';');
     const hit = geomCache.get(key);
     if (hit) return hit;
-    const pts = ctrl.smooth && ctrl.length > 2 ? splineCurve(ctrl, !!ctrl.plat, STEP) : trackCurve(ctrl, !!ctrl.plat, STEP);
+    const pts = (ctrl.arc && ctrl.plat && arcCurve(ctrl, STEP)) || (ctrl.smooth && ctrl.length > 2 ? splineCurve(ctrl, !!ctrl.plat, STEP) : trackCurve(ctrl, !!ctrl.plat, STEP));
     let spanStart = pts.spanStart;
     if (!spanStart || spanStart.length !== ctrl.length) {
       spanStart = [0];
@@ -154,7 +264,7 @@
     }
     const cum = U.cumLen(pts);
     const n = pts.length, lenC = cum[n - 1];
-    let waterC = 0, hillC = 0, protC = 0, airC = 0, outside = false;
+    let waterC = 0, hillC = 0, protC = 0, airC = 0, outside = false, herC = 0, guardC = 0, herHit = null;
     const protNames = new Set(), locked = [], cellLen = new Map();
     let hillHit = null, protHit = null, waterHit = null, airHit = null;
     const airOk = !!(D.airport && D.airport.buildable);   // 运营中的机场可以地下穿越（台北松山）
@@ -174,6 +284,9 @@
         else if (!locked.some(function (l) { return l.open === D.airport.closeYear; })) locked.push({ x: mx, y: my, name: (D.airport.name || '机场') + '（运营中）', open: D.airport.closeYear });
       }
       if (city.protectedId[c] > 0 && D.landmarks[city.protectedId[c] - 1].kind !== 'campus') { protC += ds; protNames.add(D.landmarks[city.protectedId[c] - 1].name); if (!protHit) protHit = [mx, my]; }
+      // 历史城区与古建周围的地下保护范围（v2.6）：只能走地下，隧道更贵
+      const hk = city.heritage ? city.heritage[c] : 0;
+      if (hk) { if (hk === 2) guardC += ds; else herC += ds; if (!herHit) herHit = [mx, my, city.heritageName(c), hk]; }
       cellLen.set(c, (cellLen.get(c) || 0) + ds);
     }
     // 曲线半径：用相隔约 60 m 的三点外接圆估计，减少采样噪声
@@ -190,10 +303,10 @@
     // 与运营中铁路的交叉（v1.9）：地面铁路 surf、高架铁路 via（同一走廊的多股轨道计为一处）
     const rx = city.railCross ? city.railCross(pts) : { surf: [], via: [] };
     const g = {
-      pts: pts, cum: cum, lenC: lenC, lenM: lenC * CFG.CELL_M, waterM: waterC * CFG.CELL_M, hillM: hillC * CFG.CELL_M, protM: protC * CFG.CELL_M,
+      pts: pts, cum: cum, lenC: lenC, lenM: lenC * CFG.CELL_M, waterM: waterC * CFG.CELL_M, hillM: hillC * CFG.CELL_M, protM: protC * CFG.CELL_M, herM: herC * CFG.CELL_M, guardM: guardC * CFG.CELL_M, herHit: herHit,
       protNames: Array.from(protNames), locked: locked, outside: outside, cellLen: cellLen, minRadiusM: minR * CFG.CELL_M,
       minRxy: minRi >= 0 ? pts[minRi] : null, minRi: minRi,
-      spanStart: spanStart, hillHit: hillHit, protHit: protHit, waterHit: waterHit,
+      spanStart: spanStart, arcs: pts.arcs || null, hillHit: hillHit, protHit: protHit, waterHit: waterHit,
       airM: airC * CFG.CELL_M, airHit: airHit, railSurf: rx.surf, railVia: rx.via, railS: rx.surf.length, railV: rx.via.length,
     };
     if (geomCache.size > 3000) geomCache.clear();
@@ -282,6 +395,19 @@
     for (const id in net.segments) { const s = net.segments[id]; if (s.line === lid && (s.a === sid || s.b === sid)) { const t = M.stationTangent(net, s, sid); let a = Math.atan2(t[1], t[0]) % Math.PI; if (a < 0) a += Math.PI; return a; } }
     return null;
   };
+  // 站台方向相对已建是否有实质变化（v2.6.1）：接新区段时自动锁定的方向等于原来的方向，不算改动，也不算既有区段改线
+  M.platDirChanged = function (off, draft, sid, lid) {
+    const a0 = draft.stations[sid], b0 = off.stations[sid], a = a0 && a0.pd && a0.pd[lid], b = b0 && b0.pd && b0.pd[lid];
+    if (a === b || (a == null && b == null)) return false;
+    if (a == null || b != null || !b0) return true;
+    const cur = M.platformDir(off, sid, lid); if (cur == null) return true;
+    const d = Math.abs(a - cur) % Math.PI;
+    return Math.min(d, Math.PI - d) > 0.002;
+  };
+  M.platDirsChanged = function (off, draft, sid) {
+    const a = draft.stations[sid], b = off.stations[sid];
+    return Object.keys(Object.assign({}, a && a.pd, b && b.pd)).some(function (lid) { return M.platDirChanged(off, draft, sid, lid); });
+  };
   // 设置某条线路在本站的站台层；只有这一条线路时直接改变车站形式
   M.setPlatform = function (net, sid, lid, type) {
     const st = net.stations[sid]; if (!st) return;
@@ -297,7 +423,7 @@
   M.trackKey = function (s) {
     const fwd = M.idNum(s.a) <= M.idNum(s.b), pts = (s.pts || []).slice();
     if (!fwd) pts.reverse();
-    return (fwd ? s.a + '|' + s.b : s.b + '|' + s.a) + '|' + s.type + (s.curve === 'smooth' ? '|s' : '') + '|' + pts.map(function (p) { return p[0].toFixed(3) + ',' + p[1].toFixed(3); }).join(';');
+    return (fwd ? s.a + '|' + s.b : s.b + '|' + s.a) + '|' + s.type + (s.curve === 'smooth' ? '|s' : s.curve === 'arc' ? '|a' : '') + '|' + pts.map(function (p) { return p[0].toFixed(3) + ',' + p[1].toFixed(3); }).join(';');
   };
   // 与 seg 共用轨道的其他线路区段；rev 表示其方向与 seg 相反
   M.coTrackSegs = function (net, seg) {
@@ -312,6 +438,36 @@
     for (const id in net.segments) { const o = net.segments[id]; if (o.line !== lineId && ((o.a === a && o.b === b) || (o.a === b && o.b === a)) && (!best || M.idNum(o.id) < M.idNum(best.id))) best = o; }
     return best;
   };
+  // 并线运行（v2.3 玩家反馈）：线路 lid 从车站 from 起，沿线路 other 的既有轨道一直延伸到 to，逐段共用轨道（共线运营，免建设费）。
+  // 沿途车站本线也停靠；建设方式不同的车站按本线增设站台层。路径须完全在 other 的轨道上
+  M.runAlong = function (net, lid, from, other, to) {
+    if (!net.lines[lid] || !net.lines[other] || lid === other) return { error: '线路不存在' };
+    if (from === to) return { error: '起点与终点相同' };
+    const adj = new Map();
+    for (const s of M.lineSegs(net, other)) { (adj.get(s.a) || adj.set(s.a, []).get(s.a)).push(s); (adj.get(s.b) || adj.set(s.b, []).get(s.b)).push(s); }
+    if (!adj.has(from) || !adj.has(to)) return { error: '两站都要在「' + net.lines[other].name + '」上' };
+    const prev = new Map([[from, null]]), q = [from];
+    while (q.length && !prev.has(to)) { const s = q.shift(); for (const sg of adj.get(s)) { const o = sg.a === s ? sg.b : sg.a; if (!prev.has(o)) { prev.set(o, { s: s, seg: sg }); q.push(o); } } }
+    if (!prev.has(to)) return { error: '沿「' + net.lines[other].name + '」到不了这座车站' };
+    const path = []; for (let c = to; prev.get(c); c = prev.get(c).s) path.unshift(prev.get(c));
+    const served = new Set(M.lineTopo(net, lid).stations || []);
+    let added = 0;
+    for (const step of path) {
+      const host = step.seg, a = step.s, b = host.a === a ? host.b : host.a;
+      if (M.findSeg(net, lid, a, b)) continue;
+      const hp = (host.pts || []).map(function (p) { return [p[0], p[1]]; });
+      const r = M.addSegment(net, lid, a, b, host.a === a ? hp : hp.reverse(), host.type);
+      if (r.error) return r;
+      if (host.curve) net.segments[r.id].curve = host.curve;
+      for (const sid of [a, b]) { const s0 = net.stations[sid]; if (!served.has(sid) && s0 && s0.type !== host.type) { s0.lv = Object.assign({}, s0.lv || {}); s0.lv[lid] = host.type; } served.add(sid); }
+      added++;
+    }
+    if (!added) return { error: '这一段已经是本线的轨道' };
+    M.normalizeLevels(net);
+    const tp = M.lineTopo(net, lid);
+    if (tp.topo === 'invalid') return { error: tp.reason };
+    return { added: added, stations: path.length + 1, topo: tp.topo };
+  };
   // 把 seg 的线形与建设方式同步给共线区段（拖动转弯点、改建设方式后保持同一条轨道）
   M.syncCoTrack = function (net, seg, co) {
     for (const c of co) { const o = net.segments[c.id]; if (!o) continue; const pts = (seg.pts || []).map(function (p) { return [p[0], p[1]]; }); o.pts = c.rev ? pts.reverse() : pts; o.type = seg.type; if (seg.curve) o.curve = seg.curve; else delete o.curve; }
@@ -319,11 +475,20 @@
 
   // ---------------- 线路形态 ----------------
   M.lineSegs = function (net, lineId) {
+    const ix = segIdx.get(net);
+    if (ix) return ix.byLine.get(lineId) || NO_SEGS;
     const out = [];
     for (const id in net.segments) if (net.segments[id].line === lineId) out.push(net.segments[id]);
     return out;
   };
   M.lineTopo = function (net, lineId) {
+    const ix = segIdx.get(net);
+    if (!ix) return lineTopo(net, lineId);
+    let t = ix.topo.get(lineId);
+    if (!t) ix.topo.set(lineId, t = lineTopo(net, lineId));
+    return t;
+  };
+  function lineTopo(net, lineId) {
     const segs = M.lineSegs(net, lineId);
     if (!segs.length) return { topo: 'empty', routes: [], stations: [] };
     const adj = new Map();
@@ -340,8 +505,24 @@
     const line = net.lines[lineId];
     const orient = function (seg, from) { return { id: seg.id, rev: seg.a !== from }; };
     if (E === Vn - 1) {
-      // 树：普通线路或支线
-      let root = (line && line.root && leaves.indexOf(line.root) >= 0) ? line.root : null;
+      // 树：普通线路或支线。起点端（各方向共用的主干一端）：
+      // 带支线时只采用玩家明确指定的（rootSet）；否则取离最近分岔站最远的端点，即主干那头（v2.5 玩家反馈：
+      // 以前沿用画第一段时的起点站，从支线末端画起的线路会生成「支线末端 ↔ 另一支线末端」的路线，列车到了一支线末端就折返去另一支线）
+      const fork = maxDeg > 2;
+      let root = (line && line.root && leaves.indexOf(line.root) >= 0 && (!fork || line.rootSet)) ? line.root : null;
+      if (!root && fork) {
+        const arm = function (lf) {   // 端点到最近分岔站的直线距离之和（格）
+          let len = 0, prev = null, cur = lf;
+          for (;;) {
+            const nx = adj.get(cur).find(function (e) { return e.other !== prev; }); if (!nx) break;
+            const A = net.stations[cur], B = net.stations[nx.other]; len += A && B ? Math.hypot(A.x - B.x, A.y - B.y) : 1;
+            prev = cur; cur = nx.other; if (adj.get(cur).length > 2) break;
+          }
+          return len;
+        };
+        let best = -1;
+        for (const lf of leaves) { const a = arm(lf) + (line && lf === line.root ? 1e-6 : 0); if (a > best + 1e-9) { best = a; root = lf; } }
+      }
       const bfs = function (src) {
         const par = new Map([[src, null]]), dist = new Map([[src, 0]]), qq = [src];
         let far = src;
@@ -363,7 +544,14 @@
         st.reverse(); sg.reverse();
         routes.push({ st: st, segs: sg, loop: false });
       }
-      return { topo: maxDeg <= 2 ? 'path' : 'branch', routes: routes, stations: nodes, adj: adj, root: root, leaves: leaves };
+      // 主线方向（v2.3，支线）：玩家指定的端点站对应的路线排在最前，显示为线路本名；未指定时保持原有顺序与命名
+      let main = null;
+      if (maxDeg > 2 && line && line.main && line.main !== root && leaves.indexOf(line.main) >= 0) {
+        main = line.main;
+        const k = routes.findIndex(function (r) { return r.st[r.st.length - 1] === main; });
+        if (k > 0) routes.unshift(routes.splice(k, 1)[0]);
+      }
+      return { topo: maxDeg <= 2 ? 'path' : 'branch', routes: routes, stations: nodes, adj: adj, root: root, leaves: leaves, main: main };
     }
     if (E === Vn && maxDeg === 2) {
       let start = (line && line.root && adj.has(line.root)) ? line.root : M.sortIds(nodes.slice())[0];
@@ -406,6 +594,7 @@
       for (let k = 0; k < nc; k++) {
         if (k === keep) continue;
         const nl = M.newLine(net, net.lines[lid].name + '（拆分）');
+        keepSpeed(net, lid, nl);
         const moved = segs.filter(function (s) { return comp.get(s.a) === k; });
         for (const s of moved) s.line = nl;
         M.moveLevels(net, lid, nl, moved);
@@ -413,6 +602,7 @@
       }
     }
     M.normalizeLevels(net);
+    M.pruneServices(net);
     return notes;
   };
 
@@ -424,6 +614,58 @@
     const cols = D.lineColorsNice;
     net.lines[id] = { id: id, num: num, name: name || (num + ' 号线'), color: cols[(num - 1) % cols.length], root: null };
     return id;
+  };
+  // 线路徽标（线路图端点、图例、跟随卡）：取当前名称，改名后随之变化（玩家反馈：以前一直显示开局时的编号）
+  // 「3 号线」→ 3，「S1 线」→ S1，「机场 2 号线」→ 机场2，「机场快线」→ 机场，「Airport Express」→ AE
+  M.lineBadge = function (L) {
+    const raw = String((L && L.name) || '').trim();
+    const core = raw.replace(/\s+/g, ' ').replace(/号线?|线路?/g, '').trim() || raw, tight = core.replace(/\s+/g, '');
+    if (!tight) return String((L && L.num) || '•');
+    if (/^[\x00-\x7f]+$/.test(core)) {
+      const num = /\d+[A-Za-z]?/.exec(core);
+      if (num) return (/^[A-Za-z]\d/.test(tight) ? tight.slice(0, 3) : num[0]);
+      return core.indexOf(' ') > 0 ? core.split(' ').map(function (w) { return w.charAt(0).toUpperCase(); }).join('').slice(0, 3) : tight.slice(0, 3);
+    }
+    return Array.from(tight).slice(0, /\d/.test(tight) ? 3 : 2).join('');
+  };
+  // ---------------- 线路运行速度（v2.5 玩家反馈） ----------------
+  M.lineKmh = function (L) { return (L && L.speed) || 80; };
+  M.speedGrade = function (L) { const v = M.lineKmh(L), G = CFG.metro.speedGrades; for (const x of G) if (x.kmh === v) return x; return G[2]; };
+  M.minRadius = function (L) { return M.speedGrade(L).minR; };
+  M.warnRadius = function (L) { return M.speedGrade(L).warnR; };
+  // 拆开线路时新线路沿用原线路的运行速度
+  const keepSpeed = function (net, from, to) { const A = net.lines[from], B = net.lines[to]; if (A && B && A.speed) B.speed = A.speed; };
+  // ---------------- 运行交路（v2.5 玩家反馈：快慢车、区间车） ----------------
+  // 每条线路默认有按顺序停靠所有站的全程交路（不存入 svcs，也不能删除）；line.svcs 记录玩家加开的交路：
+  // { id, name, from, to, via, skip }：from / to 为区间端点（缺省为线路端点），via 为支线方向上的一站，skip 为不停靠的车站。
+  // 环线的交路只能跳站（首站固定停靠），不能折返。返回所在路线序号与停靠站在路线上的序号；车站已不在线路上时返回 null
+  M.svcStops = function (tp, sv) {
+    const skip = new Set(sv.skip || []);
+    for (let ri = 0; ri < tp.routes.length; ri++) {
+      const rt = tp.routes[ri], st = rt.st;
+      if (sv.via && st.indexOf(sv.via) < 0) continue;
+      if (rt.loop) {
+        if (sv.from || sv.to) continue;
+        const stops = []; st.forEach(function (s, i) { if (i === 0 || !skip.has(s)) stops.push(i); });
+        return stops.length >= 2 ? { ri: ri, stops: stops, loop: true } : null;
+      }
+      let ia = sv.from ? st.indexOf(sv.from) : 0, ib = sv.to ? st.indexOf(sv.to) : st.length - 1;
+      if (ia < 0 || ib < 0 || ia === ib) continue;
+      if (ia > ib) { const t = ia; ia = ib; ib = t; }
+      const stops = []; for (let i = ia; i <= ib; i++) if (i === ia || i === ib || !skip.has(st[i])) stops.push(i);
+      return { ri: ri, stops: stops, ia: ia, ib: ib, loop: false };
+    }
+    return null;
+  };
+  M.svcLabel = function (line, sv) { return line.name + ' · ' + sv.name; };
+  // 线路调整后清理已失效的交路（区间端点或方向站不再在本线上）；线路形态暂时无效时不动，等草案改好
+  M.pruneServices = function (net) {
+    for (const lid in net.lines) {
+      const L = net.lines[lid]; if (!L.svcs || !L.svcs.length) continue;
+      const tp = M.lineTopo(net, lid); if (tp.topo === 'invalid' || tp.topo === 'empty') continue;
+      L.svcs = L.svcs.filter(function (sv) { return !!M.svcStops(tp, sv); });
+      if (!L.svcs.length) delete L.svcs;
+    }
   };
   M.addStation = function (net, x, y, opts, city) {
     const id = M.newId(net, 's');
@@ -506,8 +748,8 @@
     return { station: sid, dist: d, co: co.length };
   };
   M.removeSegment = function (net, segId) { delete net.segments[segId]; return M.normalizeLines(net); };
-  M.removeStation = function (net, sid) {
-    const st = net.stations[sid], notes = [];
+  const dropStation = function (net, sid, notes) {
+    const st = net.stations[sid];
     const byLine = new Map();
     const ctrlLen = function (pts) { let L = 0; for (let i = 1; i < pts.length; i++) L += U.dist(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]); return L; };
     for (const id in net.segments) {
@@ -538,7 +780,7 @@
             notes.push((ln ? ln.name + ' ' : '') + A.name + '—' + B.name + ' 两侧建设方式不同，合并后统一为' + CFG.metro.typeName[type] + '，原' + CFG.metro.typeName[other] + '部分按改建计费');
           }
           net.segments[id] = { id: id, line: lid, a: o1, b: o2, pts: p1.concat([[st.x, st.y]], p2), type: type, base: Array.from(new Set(base)) };
-          if (s1.curve === 'smooth' && s2.curve === 'smooth') net.segments[id].curve = 'smooth';
+          if (s1.curve && s1.curve === s2.curve) net.segments[id].curve = s1.curve;
         }
       } else {
         for (const s of segs) delete net.segments[s.id];
@@ -547,20 +789,29 @@
       if (line && line.root === sid) line.root = null;
     }
     delete net.stations[sid];
+  };
+  M.removeStation = function (net, sid) {
+    const notes = [];
+    dropStation(net, sid, notes);
     return notes.concat(M.normalizeLines(net) || []);
+  };
+  // 批量拆除：先拆所选轨道（两端都选中的区段不再被「轨道直连」接回），再拆所选车站，最后统一整理线路，
+  // 中途不产生临时拆分的线路，线路名称与编号留给剩余的主要部分
+  M.removeMany = function (net, stations, segs) {
+    const notes = [];
+    for (const id of segs || []) delete net.segments[id];
+    for (const id of stations || []) if (net.stations[id]) dropStation(net, id, notes);
+    return Array.from(new Set(notes.concat(M.normalizeLines(net) || [])));
   };
   // 拆除预览：按实际拆除规则在副本上执行，比较前后网络（直连保留、断开环线、取消支线、失去换乘或服务）
   M.demolishImpact = function (net, target) {
     const after = M.clone(net);
-    const notes = target.kind === 'station' ? M.removeStation(after, target.id) : M.removeSegment(after, target.id);
+    const notes = target.kind === 'many' ? M.removeMany(after, target.stations, target.segs) : target.kind === 'station' ? M.removeStation(after, target.id) : M.removeSegment(after, target.id);
     const removed = [], added = [], lines = [], lost = [], lostXfer = [];
     for (const id in net.segments) if (!after.segments[id]) removed.push(id);
     for (const id in after.segments) if (!net.segments[id]) added.push(id);
     const nm = function (n, sid) { return n.stations[sid] ? n.stations[sid].name : ''; };
-    if (target.kind === 'station') {
-      const n0 = M.stationLines(net, target.id).length;
-      if (n0 >= 2) lines.push('换乘站「' + nm(net, target.id) + '」将消失');
-    }
+    for (const sid of target.kind === 'many' ? target.stations : target.kind === 'station' ? [target.id] : []) if (M.stationLines(net, sid).length >= 2) lines.push('换乘站「' + nm(net, sid) + '」将消失');
     for (const id of added) { const s = after.segments[id], L = after.lines[s.line]; lines.push((L ? L.name : '') + ' 轨道直连 ' + nm(after, s.a) + '—' + nm(after, s.b) + '（保留运营）'); }
     for (const lid in net.lines) {
       const t0 = M.lineTopo(net, lid), L = net.lines[lid];
@@ -588,8 +839,9 @@
     return null;
   };
   M.stationLines = function (net, sid) {
-    const set = new Set();
-    for (const id in net.segments) { const s = net.segments[id]; if (s.a === sid || s.b === sid) set.add(s.line); }
+    const set = new Set(), near = M.segsAt(net, sid);
+    if (near) for (const s of near) set.add(s.line);
+    else for (const id in net.segments) { const s = net.segments[id]; if (s.a === sid || s.b === sid) set.add(s.line); }
     return Array.from(set);
   };
 
@@ -646,6 +898,7 @@
       if (city.regionOpen[city.lockRegion(c)]) return { ok: false, msg: rg.name + ' 尚未与已开放城区连通' + (yr ? '（参考 ' + yr + ' 年连通）' : ''), how: '与已开放城区连成一片后即可建设。可推进时间等待相邻区域开放，或把车站移到可以建设的范围。' };
       return { ok: false, msg: rg.name + ' 尚未开放（' + city.lockText(c) + '）', how: !yr ? '该区域不开放建设，请把车站移到其他区域。' : '区域开放前不能建设。可推进时间等待开放，或把车站移到已开放区域。' };
     }
+    if (city.heritage && city.heritage[c] && type !== 'underground') return city.heritage[c] === 2 ? { ok: false, msg: '「' + city.heritageName(c) + '」只能建地下车站', how: '把车站改为地下站（建设方式选「地下」），或移到保护范围以外。' } : { ok: false, msg: '历史城区「' + city.heritageName(c) + '」只能建地下车站', how: '把车站改为地下站（建设方式选「地下」），或移到历史城区以外。' };
     if (rg.hub && type !== 'underground') return { ok: false, msg: rg.name + '照常运营：范围内只能建地下车站', how: '把车站改为地下站（建设方式选「地下」），或移到机场范围以外。' };
     if (city.lu[c] === LU.AIRPORT) {
       if (!D.airport.buildable) return { ok: false, msg: (D.airport.name || '机场') + '仍在运营（' + D.airport.closeYear + ' 年关闭）', how: '机场关闭前不能建设，请把车站移到机场范围以外。' };
@@ -664,7 +917,32 @@
     return 2 * Math.sqrt(Math.max(1, Lm) / a);
   }
   M.legTime = legTime;
-  M.compile = function (net, city) {
+  // 由全程路线 B 生成一个交路的运营路线：停靠站之外的车站不停车通过（中途不减速，只计首尾一次加减速；不模拟越行站），
+  // 编组只受实际停靠车站的站台限制（通过的小站不限制）。设置面板用它预览用时，确认后由 compile 生成
+  M.patternRoute = function (C, line, B, sv, plan) {
+    const mc = CFG.metro, stops = plan.stops, n = stops.length, loop = !!B.loop, last = B.legSec.length;
+    const seq = loop ? stops.concat([last]) : stops, i0 = seq[0], i1 = seq[seq.length - 1];
+    const legLenM = [], legSec = [], legSeg = [], legSegs = [], stopDist = [], stopPt = [];
+    for (const i of seq) { stopDist.push(B.stopDist[i] - B.stopDist[i0]); stopPt.push(B.stopPt[i] - B.stopPt[i0]); }
+    for (let k = 0; k + 1 < seq.length; k++) {
+      const p = seq[k], q = seq[k + 1], refs = [];
+      let L = 0, T = 0, vm = 0;
+      for (let i = p; i < q; i++) { L += B.legLenM[i]; T += B.legLenM[i] / B.legV[i]; vm = Math.max(vm, B.legV[i]); refs.push(B.segRefs[i]); }
+      legLenM.push(L); legSeg.push(refs[0]); legSegs.push(refs);
+      legSec.push(q === p + 1 ? B.legSec[p] : Math.max(T + (B.legV[p] + B.legV[q - 1]) / (2 * mc.accel), legTime(L, vm, mc.accel)));
+    }
+    const pts = B.pts.slice(B.stopPt[i0], B.stopPt[i1] + 1), hs = B.hs.slice(B.stopPt[i0], B.stopPt[i1] + 1), cum = U.cumLen(pts);
+    const stIds = stops.map(function (i) { return B.stIds[i]; }), stIdx = stops.map(function (i) { return B.stIdx[i]; });
+    let minCars = 8; for (const s of stIds) minCars = Math.min(minCars, mc.carsBySize[C.net.stations[s].size]);
+    let runSec = 0; for (const t of legSec) runSec += t;
+    return {
+      id: 0, lineId: B.lineId, line: line, color: line.color, label: M.svcLabel(line, sv), loop: loop, branch: false, main: false, svc: sv.id, baseId: B.id, skipped: (loop ? B.stIds.length : plan.ib - plan.ia + 1) - n,
+      lvPen: stops.map(function (i) { return B.lvPen[i]; }), stIds: stIds, stIdx: stIdx, segRefs: legSeg, legSegs: legSegs, pts: pts, hs: hs, cum: cum, stopDist: stopDist, stopPt: stopPt, legLenM: legLenM, legSec: legSec, legV: B.legV,
+      cars: minCars, cap: minCars * mc.carCap, runSec: runSec, cycleSec: loop ? runSec + mc.dwell * n : 2 * runSec + 2 * mc.dwell * Math.max(0, n - 2) + 2 * mc.turnaround, lenM: cum[cum.length - 1] * CFG.CELL_M, kmh: B.kmh, opsK: B.opsK,
+    };
+  };
+  M.compile = function (net, city) { return M.withSegIndex([net], function () { return compile(net, city); }); };
+  function compile(net, city) {
     const C = { net: net, stations: [], sIndex: new Map(), segs: new Map(), lines: [], routes: [], topo: new Map() };
     const ids = M.sortIds(Object.keys(net.stations));
     ids.forEach(function (id, k) { C.sIndex.set(id, k); C.stations.push(net.stations[id]); });
@@ -691,8 +969,9 @@
       C.lines.push(line);
       if (tp.topo === 'invalid' || tp.topo === 'empty') continue;
       if (tp.routes.some(function (rt) { return rt.segs.some(function (ref) { return !C.segs.has(ref.id); }); })) continue;
+      const vk = M.lineKmh(line) / 80, grade = M.speedGrade(line), bases = [];   // 运行速度按建设方式的基准速度等比调整（未设定为 80 km/h，即基准速度）
       tp.routes.forEach(function (rt, ri) {
-        const pts = [], hs = [], stopDist = [0], legLenM = [], legSec = [], legSeg = [];
+        const pts = [], hs = [], stopDist = [0], stopPt = [0], legLenM = [], legSec = [], legSeg = [], legV = [];
         let minCars = 8, length = 0;
         for (let k = 0; k < rt.segs.length; k++) {
           const ref = rt.segs[k], cs = C.segs.get(ref.id);
@@ -702,11 +981,11 @@
             if (pts.length) { const prev = pts[pts.length - 1]; length += U.dist(prev[0], prev[1], p[i][0], p[i][1]); }
             pts.push(p[i]); hs.push(h[i]);
           }
-          stopDist.push(length);
+          stopDist.push(length); stopPt.push(pts.length - 1);
           const Lm = cs.g.lenM;
-          let vmax = mc.vmax[cs.seg.type];
+          let vmax = mc.vmax[cs.seg.type] * vk;
           if (isFinite(cs.g.minRadiusM)) vmax = Math.min(vmax, Math.max(8, Math.sqrt(mc.latAccel * cs.g.minRadiusM)));
-          legLenM.push(Lm); legSec.push(legTime(Lm, vmax, mc.accel)); legSeg.push(ref);
+          legLenM.push(Lm); legSec.push(legTime(Lm, vmax, mc.accel)); legSeg.push(ref); legV.push(vmax);
         }
         const stIdx = rt.st.map(function (s) { return C.sIndex.get(s); });
         for (const s of rt.st) minCars = Math.min(minCars, mc.carsBySize[net.stations[s].size]);
@@ -716,18 +995,24 @@
         const cycleSec = rt.loop ? runSec + mc.dwell * nStops : 2 * runSec + 2 * mc.dwell * Math.max(0, nStops - 2) + 2 * mc.turnaround;
         let label = line.name;
         if (tp.topo === 'branch') {
-          // 支线可单独命名（如「机场支线」）；未命名时按终点站显示方向
+          // 支线可单独命名（如「机场支线」）；未命名时按终点站显示方向。指定了主线方向时，主线显示线路本名（v2.3）
           const leaf = rt.st[rt.st.length - 1], bn = line.branchNames && line.branchNames[leaf];
-          label = bn ? line.name + ' ' + bn : line.name + '（往' + net.stations[leaf].name + '）';
+          label = bn ? line.name + ' ' + bn : (leaf === tp.main ? line.name : line.name + '（往' + net.stations[leaf].name + '）');
         }
         // 不在主站台层停靠的车站（天地换乘的另一层站台）：进出站与换乘多走一段垂直通道
         const lvPen = rt.st.map(function (sid) { const st = net.stations[sid]; return M.platType(st, lid) !== st.type ? 1 : 0; });
-        C.routes.push({
-          id: C.routes.length, lineId: lid, line: line, color: line.color, label: label, loop: rt.loop, branch: tp.topo === 'branch', lvPen: lvPen,
-          stIds: rt.st, stIdx: stIdx, segRefs: legSeg, pts: pts, hs: hs, cum: cum, stopDist: stopDist, legLenM: legLenM, legSec: legSec,
-          cars: minCars, cap: minCars * mc.carCap, runSec: runSec, cycleSec: cycleSec, lenM: cum[cum.length - 1] * CFG.CELL_M,
-        });
+        const route = {
+          id: C.routes.length, lineId: lid, line: line, color: line.color, label: label, loop: rt.loop, branch: tp.topo === 'branch', main: tp.main != null && rt.st[rt.st.length - 1] === tp.main, lvPen: lvPen,
+          stIds: rt.st, stIdx: stIdx, segRefs: legSeg, legSegs: legSeg.map(function (ref) { return [ref]; }), pts: pts, hs: hs, cum: cum, stopDist: stopDist, stopPt: stopPt, legLenM: legLenM, legSec: legSec, legV: legV,
+          cars: minCars, cap: minCars * mc.carCap, runSec: runSec, cycleSec: cycleSec, lenM: cum[cum.length - 1] * CFG.CELL_M, kmh: grade.kmh, opsK: grade.ops,
+        };
+        C.routes.push(route); bases.push(route);
       });
+      // 玩家加开的交路（快慢车、区间车）：编译为独立的运营路线，排在全程路线之后，各自配车、发车与计客流
+      for (const sv of line.svcs || []) {
+        const plan = M.svcStops(tp, sv);
+        if (plan && bases[plan.ri]) { const r = M.patternRoute(C, line, bases[plan.ri], sv, plan); r.id = C.routes.length; C.routes.push(r); }
+      }
     }
     // 车站服务线路
     C.stationRoutes = C.stations.map(function () { return []; });
@@ -736,10 +1021,10 @@
     C.serviced = C.stations.map(function (s, i) { return C.stationRoutes[i].length > 0; });
     C.stLevels = C.stations.map(function (s) { return s.lv ? M.stationLevels(net, s.id) : null; });
     return C;
-  };
+  }
 
   // ---------------- 草案差异、费用与冲突 ----------------
-  function costIndex(year) { return U.priceIndex(year, CFG.cost.inflation, CFG.econBase || 1990); }
+  function costIndex(year) { return U.priceIndex(year, CFG.cost.inflation, CFG.econBase || 1990) * (CM.Eras ? CM.Eras.finance(year).cost : 1); }
   M.costIndex = costIndex;
   M.stationCost = function (type, size, year) { return CFG.cost.station[type][size] * costIndex(year); };
   M.devFactor = function (city, c) {
@@ -747,14 +1032,24 @@
     const L = city.lu[c];
     if (L === LU.WATER || L === LU.PARK || L === LU.HILL) return 0;
     if (!city.street[c]) return 0.06;
-    return U.clamp((city.pop[c] + city.jobs[c]) / 2500, 0.15, 1.6) * (1 - city.taken[c]);
+    const hk = city.heritage ? city.heritage[c] : 0;   // 历史城区的拆迁（v2.6）：老建筑密集，补偿与保护费用更高
+    return U.clamp((city.pop[c] + city.jobs[c]) / 2500, 0.15, 1.6) * (1 - city.taken[c]) * (hk && CFG.cost.heritage ? CFG.cost.heritage.demolish : 1);
   };
   M.trackCost = function (g, type, year) {
     const ci = costIndex(year), C = CFG.cost;
     let v = g.lenM / 1000 * C.trackPerKm[type] + g.waterM / 1000 * C.riverPerKm[type];
-    if (type === 'underground') v += g.hillM / 1000 * C.hillPerKm + g.protM / 1000 * C.protectedPerKm;
+    if (type === 'underground') v += g.hillM / 1000 * C.hillPerKm + g.protM / 1000 * C.protectedPerKm + M.heritageTrack(g);
     v += M.railCrossCost(g, type);
     return v * ci;
+  };
+  // 历史城区（v2.6）：隧道要避开古建基础与地下遗址，按地下线单价加收；车站加收保护费（基年价格，车站费已按年份折算）
+  M.heritageTrack = function (g) {
+    const H = CFG.cost.heritage; if (!H) return 0;
+    return ((g.herM || 0) * (H.tunnel - 1) + (g.guardM || 0) * (H.guard - 1)) / 1000 * CFG.cost.trackPerKm.underground;
+  };
+  M.heritageStationFee = function (city, x, y, type, size, year) {
+    const H = CFG.cost.heritage, c = city.cellAt(x, y), hk = H && city.heritage && c >= 0 ? city.heritage[c] : 0;
+    return hk ? M.stationCost(type, size, year) * ((hk === 2 ? H.stationGuard : H.station) - 1) : 0;
   };
   // 风景区环境保护费（v2.2）：景区内轨道按该建设方式单价的 envTrack 比例、景区站按车站造价的 envStation 比例，与建设费一起结算；
   // 绘线、建站预览与施工方案用同一算法
@@ -780,7 +1075,8 @@
     return { cost: cost * costIndex(year), cells: cells };
   };
 
-  M.evaluate = function (draft, off, city, year) {
+  M.evaluate = function (draft, off, city, year) { return M.withSegIndex([draft, off], function () { return evaluate(draft, off, city, year); }); };
+  function evaluate(draft, off, city, year) {
     const res = { items: [], total: 0, byKind: { construction: 0, demolition: 0, upgrade: 0, relocation: 0 }, conflicts: [], warnings: [], demolitions: [], changes: { add: [], mod: [], del: [] }, affectedLines: new Set(), notes: [] };
     const C = CFG.cost, ci = costIndex(year);
     const item = function (kind, label, amount, ref) {
@@ -809,6 +1105,7 @@
         res.changes.add.push('新建车站「' + s.name + '」（' + CFG.metro.sizeName[s.size] + levelsTxt + '）');
         item('construction', '新建车站 ' + s.name, M.stationCost(s.type, s.size, year), id);
         if (c >= 0 && city.regions[city.region[c]].scenic) item('construction', '风景区环境保护费 · 车站 ' + s.name, M.envStationFee(s.type, s.size, year), id);
+        { const hf = M.heritageStationFee(city, s.x, s.y, s.type, s.size, year); if (hf > 0) item('construction', (city.heritage[c] === 2 ? '古建保护费 · 车站 ' : '历史城区保护费 · 车站 ') + s.name, hf, id); }
         newSite = true;
       } else {
         const moved = U.dist(s.x, s.y, o.x, o.y) * CFG.CELL_M;
@@ -840,7 +1137,7 @@
           res.changes.mod.push('车站「' + s.name + '」缩减为' + CFG.metro.sizeName[s.size] + '（不退款）');
         }
         if (s.name !== o.name) res.changes.mod.push('车站更名：' + o.name + ' → ' + s.name);
-        if (JSON.stringify(o.pd || null) !== JSON.stringify(s.pd || null)) { res.changes.mod.push('车站「' + s.name + '」调整站台方向'); touchedSt.add(id); }
+        if (M.platDirsChanged(off, draft, id)) { res.changes.mod.push('车站「' + s.name + '」调整站台方向'); touchedSt.add(id); }
         // 已有站台之间调换线路也属于草案变化，即使车站仍保留相同的站台层集合。
         const oldLines = M.stationLines(off, id);
         for (const lid of M.stationLines(draft, id)) if (oldLines.indexOf(lid) >= 0 && M.platType(s, lid) !== M.platType(o, lid)) {
@@ -892,7 +1189,7 @@
         const i = c % city.W, j = (c / city.W) | 0, VW = city.VW;
         const vs = [j * VW + i, j * VW + i + 1, (j + 1) * VW + i, (j + 1) * VW + i + 1];
         let ok = false; for (const v of vs) if (city.walk.deg[v] > 0) ok = true;
-        if (!ok) warn('车站「' + s.name + '」周边暂无步行道路，覆盖与客流受限（城市发展后会改善）', s.x, s.y, id, 'station');
+        if (!ok && touchedSt.has(id)) warn('车站「' + s.name + '」周边暂无步行道路，覆盖与客流受限（城市发展后会改善）', s.x, s.y, id, 'station');
       }
     }
     for (const id in off.stations) if (!draft.stations[id]) res.changes.del.push('拆除车站「' + off.stations[id].name + '」');
@@ -915,6 +1212,9 @@
     }
     const groups = new Map();
     const usedBase = new Set();
+    // 改了运行速度的线路（v2.5）：全线按新速度的最小半径复核
+    const respeed = new Set();
+    for (const lid in draft.lines) if (off.lines[lid] && M.lineKmh(off.lines[lid]) !== M.lineKmh(draft.lines[lid])) respeed.add(lid);
     for (const id in draft.segments) {
       const s = draft.segments[id];
       const g = M.segGeom(draft, s, city);
@@ -939,15 +1239,15 @@
           const gr = groups.get(key);
           gr.segs.push({ s: s, g: g });
           // 车站移动或本线站台方向改变、线形模式（平滑 / 穿点）改变，都会改变区段线形
-          const stMoved = function (sid) { const a = draft.stations[sid], b = off.stations[sid]; return !b || a.x !== b.x || a.y !== b.y || (a.pd && a.pd[s.line]) !== (b.pd && b.pd[s.line]); };
+          const stMoved = function (sid) { const a = draft.stations[sid], b = off.stations[sid]; return !b || a.x !== b.x || a.y !== b.y || M.platDirChanged(off, draft, sid, s.line); };
           const changed = !o || o.a !== s.a || o.b !== s.b || JSON.stringify(o.pts) !== JSON.stringify(s.pts) || (o.curve || '') !== (s.curve || '') || stMoved(s.a) || stMoved(s.b);
           if (changed) { res.affectedLines.add(s.line); touched.add(id); gr.changed = true; }
           // 只改变所属线路（贯通、拆出支线）：不算线形调整，但仍检查相接处的转角与半径
           else if (o && o.line !== s.line) { res.affectedLines.add(s.line); res.affectedLines.add(o.line); touched.add(id); }
           if (diffT.length && shared) { res.changes.mod.push('轨道 ' + lbl + ' 改为' + CFG.metro.typeName[s.type] + '（' + shareTxt + '）'); res.affectedLines.add(s.line); touched.add(id); gr.changed = true; gr.retyped = true; }
           else if (diffT.length) {
-            const pg = { lenM: 0, waterM: 0, hillM: 0, protM: 0, railS: 0, railV: 0 }, from = new Set();
-            for (const b of diffT) { const og = offGeom[b]; pg.lenM += og.lenM; pg.waterM += og.waterM; pg.hillM += og.hillM; pg.protM += og.protM; pg.railS += og.railS || 0; pg.railV += og.railV || 0; from.add(CFG.metro.typeName[off.segments[b].type]); }
+            const pg = { lenM: 0, waterM: 0, hillM: 0, protM: 0, railS: 0, railV: 0, herM: 0, guardM: 0 }, from = new Set();
+            for (const b of diffT) { const og = offGeom[b]; pg.lenM += og.lenM; pg.waterM += og.waterM; pg.hillM += og.hillM; pg.protM += og.protM; pg.herM += og.herM || 0; pg.guardM += og.guardM || 0; pg.railS += og.railS || 0; pg.railV += og.railV || 0; from.add(CFG.metro.typeName[off.segments[b].type]); }
             res.changes.mod.push('轨道 ' + lbl + ' 中原为' + Array.from(from).join('、') + '的 ' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '（按新建计费）');
             item('construction', '改建轨道 ' + lbl + '（' + U.fmtKm(pg.lenM) + ' 改为' + CFG.metro.typeName[s.type] + '）', M.trackCost(pg, s.type, year), id);
             const dm = M.trackDemolition(city, g, s.type, year, U.clamp(pg.lenM / Math.max(1, g.lenM), 0, 1));
@@ -965,12 +1265,15 @@
         item('demolition', '沿线拆迁 ' + lbl, dm.cost, id);
         res.demolitions.push.apply(res.demolitions, dm.cells);
         if (g.hillM > 1) item('construction', '风景区环境保护费 · ' + lbl + '（景区内 ' + U.fmtKm(g.hillM) + '）', M.envTrackFee(g, s.type, year), id);
+        const gd = M.speedGrade(line);
+        if (gd.track > 0) item('construction', '高速线路附加（' + gd.kmh + ' km/h）· ' + lbl, g.lenM / 1000 * C.trackPerKm[s.type] * gd.track * ci, id);
       }
       // 冲突
       const toUnder = { label: '改为地下（隧道）', op: 'segType', seg: id, value: 'underground' };
       const editSeg = { label: '调整线形', op: 'editSeg', seg: id };
       if (g.outside) conflict({ type: 'outside', kind: 'seg', ref: id, x: A.x, y: A.y, msg: lbl + '：超出地图范围', how: '把转弯点或车站移回地图内。', fixes: [editSeg] });
       if (g.hillM > 1 && s.type !== 'underground') conflict({ type: 'hill', kind: 'seg', ref: id, x: g.hillHit[0], y: g.hillHit[1], msg: lbl + '：穿过' + g.hillHit[2] + '，风景区禁止地面/高架轨道', how: '风景区内只能以隧道穿越。把这段轨道改为地下即可（会增加山体隧道费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
+      if ((g.herM > 1 || g.guardM > 1) && s.type !== 'underground' && g.herHit && !s.inherited && touched.has(id)) conflict({ type: 'protected', kind: 'seg', ref: id, x: g.herHit[0], y: g.herHit[1], msg: g.herHit[3] === 2 ? lbl + '：地面/高架轨道将穿过「' + g.herHit[2] + '」，这里只能走地下' : lbl + '：地面/高架轨道将穿过历史城区「' + g.herHit[2] + '」，这里只能走地下', how: g.herHit[3] === 2 ? '改为地下线，或绕开保护范围。' : '改为地下线，或绕开历史城区。' });
       if (g.protM > 1 && s.type !== 'underground') conflict({ type: 'protected', kind: 'seg', ref: id, x: g.protHit[0], y: g.protHit[1], msg: lbl + '：地面/高架轨道将穿过受保护建筑「' + g.protNames.join('、') + '」', how: '历史建筑和重要地标不能拆除。改为地下从下方穿越（需加固费用），或调整线形绕开。', fixes: [toUnder, editSeg] });
       // 通往地图外设施接驳口的区段（机场线等）可以穿过尚未开放的区域（区段上不能设站，车站仍须建在已开放区域）；永久不开放的区域除外
       const pEnd = CM.Fac && (CM.Fac.isPortalStation(A) || CM.Fac.isPortalStation(B));
@@ -982,16 +1285,16 @@
         const p = g.railSurf[0];
         conflict({ type: 'rail', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：地面轨道与铁路平面交叉（' + g.railS + ' 处）', how: '地铁不能与铁路平交。把这段轨道改为高架（上跨铁路）或地下（下穿铁路），每处交叉会增加相应的跨越费用；也可以调整线形，在铁路的高架段下方通过。', fixes: [{ label: '改为高架', op: 'segType', seg: id, value: 'elevated' }, toUnder, editSeg] });
       }
-      if (touched.has(id) && isFinite(g.minRadiusM)) {
-        const R = Math.round(g.minRadiusM), p = g.minRxy || [A.x, A.y];
-        if (R < CFG.metro.minRadiusM) {
-          const fixes = [editSeg];
+      if ((touched.has(id) || respeed.has(s.line)) && isFinite(g.minRadiusM)) {
+        const R = Math.round(g.minRadiusM), p = g.minRxy || [A.x, A.y], minR = M.minRadius(line), warnR = M.warnRadius(line), kmhTxt = M.lineKmh(line) !== 80 ? '（' + M.lineKmh(line) + ' km/h 线路）' : '';
+        if (R < minR) {
+          const fixes = [{ label: '自动调顺', op: 'autoFit', seg: id }, editSeg];
           const pts = s.pts || [];
           let nearK = -1, nd = 0.8;
           for (let k = 0; k < pts.length; k++) { const d = U.dist(pts[k][0], pts[k][1], p[0], p[1]); if (d < nd) { nd = d; nearK = k; } }
-          if (nearK >= 0) fixes.unshift({ label: '删除此处转弯点', op: 'removeBend', seg: id, k: nearK });
-          conflict({ type: 'radius', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：转弯半径约 ' + R + ' m，小于最小半径 ' + CFG.metro.minRadiusM + ' m', how: '弯道太急，列车无法安全通过。在弯道两侧增加转弯点（绘线时 Shift+点击）让曲线更平缓，或移动车站拉开距离。车站两侧约 ' + CFG.metro.platformHalfM + ' m 必须是直线站台。', fixes: fixes });
-        } else if (R < CFG.metro.warnRadiusM) warn(lbl + '：转弯半径约 ' + R + ' m，列车需限速通过', p[0], p[1], id);
+          if (nearK >= 0) fixes.splice(1, 0, { label: '删除此处转弯点', op: 'removeBend', seg: id, k: nearK });
+          conflict({ type: 'radius', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：转弯半径约 ' + R + ' m，小于最小半径 ' + minR + ' m' + kmhTxt, how: '点「自动调顺」让系统重新找线形；也可以加转弯点（Shift+点击）放缓弯道，或拉开车站距离。车站两侧约 ' + CFG.metro.platformHalfM + ' m 必须是直线站台。', fixes: fixes });
+        } else if (R < warnR) warn(lbl + '：转弯半径约 ' + R + ' m，列车需限速通过', p[0], p[1], id);
       }
       // 坡道：地下、地面、高架之间转换需要足够长度
       if (touched.has(id) || touchedSt.has(s.a) || touchedSt.has(s.b)) {
@@ -1032,9 +1335,10 @@
           }
           worst = Math.max(worst, best);
         }
-        if (worst > CFG.metro.maxTurnAtStationDeg) {
+        const turnMax = ls.every(function (s) { return s.curve === 'arc'; }) ? CFG.metro.maxTurnArcDeg : CFG.metro.maxTurnAtStationDeg;
+        if (worst > turnMax) {
           const ln = draft.lines[lid];
-          conflict({ type: 'turn', kind: 'station', ref: sid, x: S.x, y: S.y, msg: (ln ? ln.name : '') + ' 在车站「' + S.name + '」前后转向约 ' + Math.round(worst) + '°（最大 ' + CFG.metro.maxTurnAtStationDeg + '°）', how: '站台是一段直线，列车不能在车站处急转。把车站移到转弯之前或之后，或在车站两侧增加转弯点，让线路先直行进出车站再转弯。', fixes: [{ label: '移动车站', op: 'editStation', station: sid }].concat(ls.filter(function (s) { return (s.pts || []).length; }).slice(0, 1).map(function (s) { return { label: '调整线形', op: 'editSeg', seg: s.id }; })) });
+          conflict({ type: 'turn', kind: 'station', ref: sid, x: S.x, y: S.y, msg: (ln ? ln.name : '') + ' 在车站「' + S.name + '」前后转向约 ' + Math.round(worst) + '°（最大 ' + turnMax + '°）', how: '站台是一段直线，列车不能在车站处急转。把车站移到转弯之前或之后，或在车站两侧增加转弯点，让线路先直行进出车站再转弯。', fixes: [{ label: '移动车站', op: 'editStation', station: sid }].concat(ls.filter(function (s) { return (s.pts || []).length; }).slice(0, 1).map(function (s) { return { label: '调整线形', op: 'editSeg', seg: s.id }; })) });
         }
       });
     });
@@ -1100,10 +1404,29 @@
       const near = touchedSt.has(s.a) || touchedSt.has(s.b) || (segsBySt.get(s.a) || []).concat(segsBySt.get(s.b) || []).some(function (o) { return o.line === s.line && touched.has(o.id); });
       if (!near) continue;
       const g = M.segGeom(draft, s, city);
-      if (isFinite(g.minRadiusM) && g.minRadiusM < CFG.metro.minRadiusM) {
+      if (isFinite(g.minRadiusM) && g.minRadiusM < M.minRadius(draft.lines[s.line])) {
         const p = g.minRxy || [draft.stations[s.a].x, draft.stations[s.a].y];
         const lbl = (draft.lines[s.line] ? draft.lines[s.line].name : '') + ' ' + draft.stations[s.a].name + '—' + draft.stations[s.b].name;
-        conflict({ type: 'radius', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：受相邻改动影响，转弯半径降至约 ' + Math.round(g.minRadiusM) + ' m（最小 ' + CFG.metro.minRadiusM + ' m）', how: '线路在车站处需保持顺直，新接入的区段改变了这段轨道进出车站的方向。调整新区段的方向（增加转弯点），使其与既有线路走向更一致。', fixes: [{ label: '调整线形', op: 'editSeg', seg: id }] });
+        // 起因（v2.4 玩家反馈）：同线在端点站新建或改动的区段，常见于新加的支线比原线路更顺直，本站的站台直线方向随之转向支线、
+        // 既有区段被迫改线。「调整线形」先指向起因区段（以前直接选中受影响的既有区段，看起来像打开了主线），并可一键保持原站台方向
+        const ends = [s.a, s.b].sort(function (x, y) { const X = draft.stations[x], Y = draft.stations[y]; return U.dist(X.x, X.y, p[0], p[1]) - U.dist(Y.x, Y.y, p[0], p[1]); });
+        let jSt = null, cause = null;
+        for (const sid of ends) { const o = (segsBySt.get(sid) || []).find(function (o) { return o.id !== id && o.line === s.line && touched.has(o.id); }); if (o) { jSt = sid; cause = o; break; } }
+        const fixes = [];
+        let how = '给新区段加转弯点，让它与既有线路走向一致。', msg = '受相邻改动影响';
+        if (cause) {
+          const J = draft.stations[jSt], os = off.segments[id], fork = (segsBySt.get(jSt) || []).filter(function (o) { return o.line === s.line; }).length >= 3;
+          msg = '受相邻区段「' + draft.stations[cause.a].name + '—' + draft.stations[cause.b].name + '」影响';
+          if (fork && os && (os.a === jSt || os.b === jSt) && off.stations[jSt] && !(J.pd && J.pd[s.line] != null)) {
+            const t = M.stationTangent(off, os, jSt);
+            fixes.push({ label: '保持原站台方向', op: 'platDir', station: jSt, line: s.line, value: Math.atan2(t[1], t[0]) });
+            how = '新支线比原线路更顺直时，「' + J.name + '」的站台直线方向会转向支线，既有线路因此改线。点「保持原站台方向」锁定原来的方向（支线从站台末端再转出），或调整新区段的走向。';
+          }
+          fixes.push({ label: '调整新区段线形', op: 'editSeg', seg: cause.id });
+        }
+        fixes.push({ label: '自动调顺', op: 'autoFit', seg: id });
+        fixes.push({ label: cause ? '调整本区段线形' : '调整线形', op: 'editSeg', seg: id });
+        conflict({ type: 'radius', kind: 'seg', ref: id, x: p[0], y: p[1], msg: lbl + '：' + msg + '，转弯半径降至约 ' + Math.round(g.minRadiusM) + ' m（最小 ' + M.minRadius(draft.lines[s.line]) + ' m）', how: how, fixes: fixes });
       }
     }
     // 线路形态
@@ -1131,7 +1454,28 @@
         if (from) res.changes.mod.push('从 ' + from.name + ' 拆出 ' + line.name + '（拆分线路，不另收建设费）');
         else res.changes.add.push('新线路 ' + line.name);
       }
-      else if (ol.name !== line.name || ol.color !== line.color) res.changes.mod.push('线路信息修改：' + line.name);
+      else {
+        if (ol.name !== line.name || ol.color !== line.color) res.changes.mod.push('线路信息修改：' + line.name);
+        // 运行速度：提速按全线长度计改造费（线路、信号与车站通过条件），降速不退款
+        if (respeed.has(lid)) {
+          const ga = M.speedGrade(ol), gb = M.speedGrade(line);
+          res.changes.mod.push(line.name + ' 运行速度 ' + ga.kmh + ' → ' + gb.kmh + ' km/h');
+          res.affectedLines.add(lid);
+          if (gb.track > ga.track) {
+            let km = 0, cost = 0;
+            for (const s of M.lineSegs(draft, lid)) { const gm = M.segGeom(draft, s, city); km += gm.lenM / 1000; cost += gm.lenM / 1000 * C.trackPerKm[s.type] * (gb.track - ga.track) * ci; }
+            item('upgrade', '提速改造 ' + line.name + '（' + U.fmtNum(km, 1) + ' km，' + ga.kmh + ' → ' + gb.kmh + ' km/h）', cost, lid);
+          }
+        }
+        // 支线的运营方向（v2.3）：起点端（主干）与主线方向由玩家指定，只改运营组织，不收费
+        if (tp.topo === 'branch') {
+          const t0 = M.lineTopo(off, lid);
+          if (t0.topo === 'branch' && (t0.root !== tp.root || (t0.main || null) !== (tp.main || null))) {
+            res.changes.mod.push('调整 ' + line.name + ' 的运营方向：起点端「' + draft.stations[tp.root].name + '」' + (tp.main ? '，主线往「' + draft.stations[tp.main].name + '」' : '') + '（不另收建设费）');
+            res.affectedLines.add(lid);
+          }
+        }
+      }
     }
     for (const lid in off.lines) {
       if (draft.lines[lid]) continue;
@@ -1188,7 +1532,7 @@
     }
     const rest = segs.filter(function (s) { return !alive.has(s.id); });
     if (!rest.length) return { error: '没有可拆出的支线' };
-    const nl = M.newLine(net, net.lines[lid].name + '支线');
+    const nl = M.newLine(net, net.lines[lid].name + '支线'); keepSpeed(net, lid, nl);
     for (const s of rest) s.line = nl;
     M.moveLevels(net, lid, nl, rest);
     const notes = M.normalizeLines(net);
@@ -1239,7 +1583,7 @@
     const made = [];
     groups.forEach(function (gr, i) {
       if (i === keep) return;
-      const nl = M.newLine(net);
+      const nl = M.newLine(net); keepSpeed(net, lid, nl);
       for (const s of gr.segs) s.line = nl;
       net.lines[nl].root = sid;
       M.moveLevels(net, lid, nl, gr.segs);
@@ -1261,13 +1605,55 @@
       if (!e) return { error: '没有找到分岔站' };
       moved.push(e.seg); prev = e.seg; cur = e.other;
     }
-    const nl = M.newLine(net, name || (L.name + '支线'));
+    const nl = M.newLine(net, name || (L.name + '支线')); keepSpeed(net, lid, nl);
     for (const s of moved) s.line = nl;
     net.lines[nl].root = cur;
     if (L.root && L.root !== cur && moved.some(function (s) { return s.a === L.root || s.b === L.root; })) L.root = null;
     if (L.branchNames && L.branchNames[leaf]) { if (!name) net.lines[nl].name = L.name + L.branchNames[leaf]; delete L.branchNames[leaf]; }
     if (M.moveLevels) M.moveLevels(net, lid, nl, moved);
     return { line: nl, junction: cur, n: moved.length };
+  };
+  // 已建车站锁定站台方向（v2.6.1）：在既有车站接新区段时，本线站台保持原来的方向，新线从站台末端再转出，既有线路不会被带歪
+  M.lockPlatform = function (net, off, sid, lid) {
+    const s = net.stations[sid]; if (!s || !off.stations[sid] || (s.pd && s.pd[lid] != null)) return;
+    let os = null; for (const id in off.segments) { const o = off.segments[id]; if (o.line === lid && (o.a === sid || o.b === sid)) { os = o; break; } }
+    if (!os) return;
+    const t = M.stationTangent(off, os, sid);
+    M.setPlatformDir(net, sid, lid, Math.atan2(t[1], t[0]));
+  };
+  // 一键调顺（v2.6.1）：依次尝试 ①改用圆弧线形 ②去掉转弯点 ③加一个转弯点 ④转动还没建成的车站的站台方向；都放不下时恢复原样并说明原因
+  M.autoFit = function (net, segId, city, off) {
+    const s = net.segments[segId]; if (!s || !city) return { error: '区段已不存在' };
+    const L0 = net.lines[s.line], minR = M.minRadius(L0), need = minR * 1.02, co = M.coTrackSegs(net, s), oldCurve = s.curve, oldPts = s.pts;
+    const rad = function (x) { const r = M.segGeom(net, x, city).minRadiusM; return isFinite(r) ? r : 1e9; };
+    const done = function (text) { M.syncCoTrack(net, s, co); return { notes: [text] }; };
+    s.curve = 'arc';
+    if (rad(s) >= need) return done('已改用圆弧线形，最小半径约 ' + Math.round(rad(s)) + ' m');
+    const A = net.stations[s.a], B = net.stations[s.b], Lc = U.dist(A.x, A.y, B.x, B.y) || 1, nx = -(B.y - A.y) / Lc, ny = (B.x - A.x) / Lc;
+    if ((oldPts || []).length) { s.pts = []; if (rad(s) >= need) return done('已去掉转弯点并改用圆弧线形，最小半径约 ' + Math.round(rad(s)) + ' m'); }
+    let best = null;
+    for (const f of [0.04, 0.08, 0.12, 0.18, 0.25, 0.33, 0.42]) { for (const sg of [1, -1]) for (const t of [0.5, 0.35, 0.65, 0.22, 0.78]) {
+      const p = [A.x + (B.x - A.x) * t + nx * Lc * f * sg, A.y + (B.y - A.y) * t + ny * Lc * f * sg];
+      if (city.cellAt(p[0], p[1]) < 0) continue;
+      s.pts = [p]; const r = rad(s);
+      if (r >= need && (!best || r > best.r)) best = { p: p, r: r };
+    } if (best) break; }
+    if (best) { s.pts = [best.p]; return done('已加一个转弯点并改用圆弧线形，最小半径约 ' + Math.round(best.r) + ' m'); }
+    // 转动还没建成的车站的站台方向（已建车站不动）；相邻区段也要满足半径
+    s.pts = [];
+    for (const sid of [s.a, s.b]) {
+      const st = net.stations[sid]; if ((off && off.stations[sid]) || (st.pd && st.pd[s.line] != null)) continue;
+      const t = M.stationTangent(net, s, sid), a0 = Math.atan2(t[1], t[0]), near = []; for (const id in net.segments) { const o = net.segments[id]; if (o !== s && o.line === s.line && (o.a === sid || o.b === sid)) near.push(o); }
+      for (const da of [10, -10, 20, -20, 30, -30, 45, -45]) {
+        M.setPlatformDir(net, sid, s.line, a0 + da * Math.PI / 180);
+        if (rad(s) >= need && near.every(function (o) { return rad(o) >= M.minRadius(L0); })) return done('已调整「' + st.name + '」的站台方向并改用圆弧线形，最小半径约 ' + Math.round(rad(s)) + ' m');
+      }
+      M.setPlatformDir(net, sid, s.line, null);
+    }
+    if (oldCurve) s.curve = oldCurve; else delete s.curve;
+    s.pts = oldPts;
+    const G = CFG.metro.speedGrades, lower = G.filter(function (x) { return x.minR < minR; }).pop();
+    return { error: '这段轨道太短或转角太大，放不下半径 ' + minR + ' m 的弯道：拉开站距、把车站移出弯道' + (lower ? '，或把本线运行速度降到 ' + lower.kmh + ' km/h（最小半径 ' + lower.minR + ' m）' : '') + '。' };
   };
   // 执行一键修复（在草案中）
   M.applyFix = function (net, fix) {
@@ -1278,10 +1664,138 @@
       case 'removeStation': return { notes: M.removeStation(net, fix.station) };
       case 'removeSeg': return { notes: M.removeSegment(net, fix.seg) };
       case 'removeBend': { const s = net.segments[fix.seg]; if (s && s.pts && s.pts[fix.k]) { const co = M.coTrackSegs(net, s); s.pts.splice(fix.k, 1); M.syncCoTrack(net, s, co); } return {}; }
+      // 按冲突建议（M.conflictGuide）移动转弯点或车站
+      case 'moveBend': { const s = net.segments[fix.seg]; if (s && s.pts && s.pts[fix.k]) { const co = M.coTrackSegs(net, s); s.pts[fix.k] = [fix.to[0], fix.to[1]]; M.syncCoTrack(net, s, co); } return {}; }
+      case 'moveStation': { const s = net.stations[fix.station]; if (s) { s.x = fix.to[0]; s.y = fix.to[1]; } return {}; }
+      case 'platDir': M.setPlatformDir(net, fix.station, fix.line, fix.value); return {};
+      case 'autoFit': return M.autoFit(net, fix.seg, CM.game && CM.game.city, CM.game && CM.game.net);
       case 'splitBranch': return M.splitBranch(net, fix.line);
       case 'normalize': return { notes: M.normalizeLines(net) };
       default: return { error: '无法自动处理' };
     }
+  };
+
+  // ---------------- 冲突的定位与调整建议（v2.3） ----------------
+  // 不只说「低于 250 米」：找出出问题的那一小段轨道（stretch，世界坐标折线，可多段），弯道另给当前与所需的转弯圆（circle），
+  // 并实际试算控制点或车站该往哪边、移多远才能满足规则（arrow + 一键 fix）。结果按草案版本由调用方缓存
+  const KK = Math.max(1, Math.round(0.24 / STEP));
+  function circum(p0, p1, p2) {
+    const ax = p0[0], ay = p0[1], bx = p1[0], by = p1[1], cx = p2[0], cy = p2[1], d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(d) < 1e-12) return null;
+    const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+    const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d, uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+    return { c: [ux, uy], r: Math.hypot(ax - ux, ay - uy) };
+  }
+  // 连续满足 test(中点, 序号) 的采样段 → 折线列表
+  function runs(pts, test) {
+    const out = []; let cur = null;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const m = [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2];
+      if (test(m, i)) { if (!cur) { cur = [pts[i]]; out.push(cur); } cur.push(pts[i + 1]); } else cur = null;
+    }
+    return out;
+  }
+  // 弯道过急的轨道段（半径小于最小值的连续采样）与最急处的转弯圆；拖动控制点时实时显示也用它
+  M.tightStretch = function (g, minRm) {
+    const R0 = (minRm || CFG.metro.minRadiusM) / CFG.CELL_M, pts = g.pts, tight = new Uint8Array(pts.length);
+    for (let i = KK; i + KK < pts.length; i++) { const c = circum(pts[i - KK], pts[i], pts[i + KK]); if (c && c.r < R0) for (let j = i - KK; j <= i + KK; j++) tight[j] = 1; }
+    const i0 = g.minRi, c = i0 >= KK && i0 + KK < pts.length ? circum(pts[i0 - KK], pts[i0], pts[i0 + KK]) : null;
+    return { stretch: runs(pts, function (m, i) { return tight[i] && tight[i + 1]; }), circle: c ? { c: c.c, r: c.r, need: R0, at: pts[i0] } : null };
+  };
+  function radiusGuide(net, s, g, city, quick) {
+    const minR = M.minRadius(net.lines[s.line]), t0 = M.tightStretch(g, minR), out = { stretch: t0.stretch, circle: t0.circle, arrow: null, text: '' };
+    if (quick) return out;
+    const pts = g.pts, tp = g.minRxy || pts[g.minRi] || pts[0], up = s.pts || [];
+    const ctrl = M.userControl(net, s);
+    let k = -1, kd = 1.2;
+    for (let q = 0; q < up.length; q++) { const d = U.dist(up[q][0], up[q][1], tp[0], tp[1]); if (d < kd) { kd = d; k = q; } }
+    const A = net.stations[s.a], B = net.stations[s.b];
+    if (k < 0) {
+      const nearSt = U.dist(tp[0], tp[1], A.x, A.y) < U.dist(tp[0], tp[1], B.x, B.y) ? A : B;
+      out.text = '弯道紧挨「' + nearSt.name + '」的站台端：车站两侧约 ' + CFG.metro.platformHalfM + ' m 必须是直线，可以在区间中部 Shift+点击加一个转弯点，让线路先直行出站再转弯，或拉开两站距离。';
+      return out;
+    }
+    // 试算：把第 k 个转弯点分别朝弯道内侧（相邻控制点连线的中点）与外侧移动，找最小的满足距离
+    const prev = ctrl[k], next = ctrl[k + 2], P = up[k], mid = [(prev[0] + next[0]) / 2, (prev[1] + next[1]) / 2];
+    let dx = mid[0] - P[0], dy = mid[1] - P[1], L = Math.hypot(dx, dy);
+    if (L < 1e-6) { dx = -(next[1] - prev[1]); dy = next[0] - prev[0]; L = Math.hypot(dx, dy) || 1; }
+    dx /= L; dy /= L;
+    const tmp = Object.assign({}, s, { pts: up.map(function (p) { return [p[0], p[1]]; }) });
+    const proxy = { stations: net.stations, segments: Object.assign({}, net.segments), lines: net.lines }; proxy.segments[s.id] = tmp;
+    const trial = function (sgn, dm) {
+      const d = dm / CFG.CELL_M; tmp.pts[k] = [P[0] + dx * d * sgn, P[1] + dy * d * sgn];
+      const gg = M.geomFromControl(M.segControl(proxy, tmp), s.type, city);
+      return { ok: !(gg.minRadiusM < minR) && !gg.outside, r: gg.minRadiusM };
+    };
+    let best = null;
+    M.withSegIndex([proxy], function () {
+      for (const sgn of [1, -1]) {
+        let lo = 0, hi = null, rr = null;
+        for (let dm = 25; dm <= 1000; dm += 25) { const t = trial(sgn, dm); if (t.ok) { hi = dm; rr = t.r; break; } lo = dm; }
+        if (hi == null) continue;
+        for (let it = 0; it < 5; it++) { const m = (lo + hi) / 2, t = trial(sgn, m); if (t.ok) { hi = m; rr = t.r; } else lo = m; }
+        const dm = Math.ceil(hi / 10) * 10 + 10;   // 留一点余量
+        if (!best || dm < best.dm) best = { sgn: sgn, dm: dm, r: Math.max(rr, trial(sgn, dm).r) };
+      }
+    });
+    const nth = '第 ' + (k + 1) + ' 个转弯点';
+    if (!best) { out.text = nth + '处转角太大，单靠移动它无法放缓到 ' + minR + ' m：在弯道两侧各加一个转弯点，把一个急弯分成两个缓弯。'; return out; }
+    const to = [P[0] + dx * best.dm / CFG.CELL_M * best.sgn, P[1] + dy * best.dm / CFG.CELL_M * best.sgn];
+    out.arrow = { from: [P[0], P[1]], to: to, m: best.dm };
+    out.text = '把' + nth + '向弯道' + (best.sgn > 0 ? '内侧' : '外侧') + '移动约 ' + best.dm + ' m（箭头方向），最小半径可达约 ' + Math.round(best.r) + ' m。';
+    out.fix = { label: '按建议移动转弯点', op: 'moveBend', seg: s.id, k: k, to: to };
+    return out;
+  }
+  // 车站选址：在附近由近到远找一处可以建站的位置
+  function siteGuide(net, st, city) {
+    for (let r = 0.16; r <= 2.4; r += 0.16) for (let q = 0; q < 16; q++) {
+      const a = q / 16 * Math.PI * 2, x = st.x + Math.cos(a) * r, y = st.y + Math.sin(a) * r;
+      if (!M.checkSite(city, x, y, st.type).ok) continue;
+      let clash = false; for (const id in net.stations) { const o = net.stations[id]; if (o !== st && U.dist(o.x, o.y, x, y) * CFG.CELL_M < CFG.metro.minSpacingM) { clash = true; break; } }
+      if (clash) continue;
+      const m = Math.round(r * CFG.CELL_M / 10) * 10;
+      return { arrow: { from: [st.x, st.y], to: [x, y], m: m }, text: '最近约 ' + m + ' m 外（箭头方向）可以建站。', fix: { label: '移到可建位置', op: 'moveStation', station: st.id, to: [x, y] } };
+    }
+    return { text: '附近 600 m 内没有可建站的位置，请换一处选址。' };
+  }
+  // quick：拖动中只给出问题段与转弯圆，不做试算
+  M.conflictGuide = function (net, c, city, quick) {
+    if (c.kind === 'seg') {
+      const s = net.segments[c.ref]; if (!s || !net.stations[s.a] || !net.stations[s.b]) return null;
+      const g = M.segGeom(net, s, city), pts = g.pts;
+      if (c.type === 'radius') return radiusGuide(net, s, g, city, quick);
+      const cell = function (m) { return city.cellAt(m[0], m[1]); };
+      const T = {
+        outside: function (m) { return cell(m) < 0; },
+        hill: function (m) { const k = cell(m); return k >= 0 && city.regions[city.region[k]].scenic && !city.cellLocked(k); },
+        protected: function (m) { const k = cell(m); return k >= 0 && city.protectedId[k] > 0 && D.landmarks[city.protectedId[k] - 1].kind !== 'campus'; },
+        locked: function (m) { const k = cell(m); return k >= 0 && city.cellLocked(k); },
+        airport: function (m) { const k = cell(m); return k >= 0 && city.lu[k] === LU.AIRPORT; },
+        rail: function (m) { return (g.railSurf || []).some(function (p) { return U.dist(p[0], p[1], m[0], m[1]) < 0.18; }); },
+        level: function (m) { return U.dist(c.x, c.y, m[0], m[1]) < 0.3; },
+        ramp: function () { return true; },
+      }[c.type];
+      const out = { stretch: T ? runs(pts, T) : [pts] };
+      if (out.stretch.length) { let n = 0; for (const r of out.stretch) for (let i = 1; i < r.length; i++) n += U.dist(r[i - 1][0], r[i - 1][1], r[i][0], r[i][1]); if (c.type !== 'ramp' && c.type !== 'level') out.text = '问题段长约 ' + Math.max(10, Math.round(n * CFG.CELL_M / 10) * 10) + ' m（地图上红色加粗部分）。'; }
+      return out;
+    }
+    const st = net.stations[c.ref]; if (!st) return null;
+    if (c.type === 'site') return quick ? null : siteGuide(net, st, city);
+    if (c.type === 'spacing') {
+      const o = net.stations[c.ref2]; if (!o) return null;
+      const dm = U.dist(st.x, st.y, o.x, o.y) * CFG.CELL_M, need = Math.ceil((CFG.metro.minSpacingM - dm) / 10) * 10 + 10;
+      let dx = st.x - o.x, dy = st.y - o.y; const L = Math.hypot(dx, dy);
+      if (L > 1e-8) { dx /= L; dy /= L; } else { dx = 1; dy = 0; }
+      const to = [st.x + dx * need / CFG.CELL_M, st.y + dy * need / CFG.CELL_M];
+      return { arrow: { from: [st.x, st.y], to: to, m: need }, text: '把「' + st.name + '」沿箭头再移开约 ' + need + ' m；也可以把线路直接连到「' + o.name + '」，形成同站换乘。', fix: { label: '移开 ' + need + ' m', op: 'moveStation', station: st.id, to: to } };
+    }
+    if (c.type === 'turn') {
+      // 车站处两侧线路方向：画出夹角，提示把车站沿线路方向挪到转弯之外
+      const segs = []; for (const id in net.segments) { const sg = net.segments[id]; if ((sg.a === st.id || sg.b === st.id)) segs.push(sg); }
+      const dirs = segs.map(function (sg) { const p = M.adjCtrl(net, sg, st.id); return [p[0], p[1]]; });
+      return { rays: dirs.map(function (p) { return [[st.x, st.y], p]; }), text: '站台必须是直线：两侧线路在站内的夹角太小。把车站沿其中一侧的线路方向挪到转弯之外，或在车站两侧各加一个转弯点，让线路先直行进出车站。' };
+    }
+    return null;
   };
 
   CM.Metro = M;

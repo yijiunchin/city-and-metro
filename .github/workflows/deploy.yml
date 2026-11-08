@@ -31,6 +31,12 @@ jobs:
           node scripts/test-web-sync.mjs
           node scripts/test-map-migrations.mjs
           node scripts/test-v22.mjs
+          node scripts/test-v23.mjs
+          node scripts/test-v24.mjs
+          node scripts/test-v25.mjs
+          node scripts/test-v251.mjs
+          node scripts/test-development-layer.mjs
+          node scripts/test-save-storage.mjs
 
       - name: 建置 dist
         run: node scripts/build.mjs

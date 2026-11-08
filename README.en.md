@@ -47,26 +47,37 @@ City and Metro is a single-player metro planning and city management game that r
 | **Automatic interface language** | Shows Traditional Chinese, Simplified Chinese or English based on your browser or device language by default; you can still pick one manually. |
 | **Cloudflare Workers deployment** | Moved from Cloudflare Pages to Workers (static assets + API) with D1 and R2, served at `city-and-metro.yijiun.com`. |
 
-Gameplay, maps, economy and traffic model are unchanged from the original **v2.2.0**.
+The game itself is synced with the original **v2.5.1**. Apart from the fixes below, gameplay, maps, economy and traffic model follow the original.
+
+### Fixes in this edition
+
+- **City goals whose target area is not yet open**: the original could issue a connect-type phase goal before the target's district opened (for example Tokyo's "Kita-Senju Transfer" in 1956, while Kita-Senju's Joto district only opens in 1962), making it impossible before the deadline. This edition waits until the district opens; such goals already issued in existing saves are withdrawn on load without reducing grants or satisfaction, and are reissued once the district opens.
 
 ## Features
 
-- **Choose a city and an era.** Eight real cities plus the Qingwan tutorial map, each with its own terrain, development phases and local goals. Free Build can also start in a later year and unlock the whole map.
+- **Choose a city and an era.** Nine real cities plus the Qingwan tutorial map, each with its own terrain, development phases and local goals. Free Build can also start in a later year and unlock the whole map.
 - **Plan your own network.** Build underground, at-grade and elevated lines; design curves, loops, branches and multi-level interchanges; set platform directions; split or through-run lines. Drafts can be previewed and undone before they open for service.
 - **Run a city's metro.** Play with unlimited funds, or balance construction, operations, fares, grants and debt in the management challenge. Use ridership, congestion, walking coverage and construction impact reports to decide what to do next.
 - **Grow with the city.** New districts, airports, campuses and scenic areas open over time, and historical events affect travel and the economy. Complete facility access tasks and read phase summaries and city chronicles. Off-map airports show direction, distance and demand at the edge of the map; connect a line to the edge portal to serve them.
 - **Watch life in your network.** Switch between 2D, 2.5D and underground views, follow trains into stations, and watch street traffic, landmarks and the city at night. Ambient sound follows the camera's district.
+- **Let the metro shape the city.** Once stations open, residents gradually switch to the metro and new homes and jobs cluster around stations.
+- **Develop and decorate stations.** Add advertising and convenience stores, station malls and integrated station-city development for non-fare income; choose styles, theme colours, public art and signage.
+- **Manage fleets and service patterns.** 43 train models unlock by city and era and can be bought, reassigned and sold. Schedule trains for peaks, off-peak and night, pick line speeds from 40 to 120 km/h, and run express and short-turn services.
+- **Run the network from Metro Core.** Manage the overview, lines, stations and trains in one place; persistent overloads can be located or handled automatically.
+- **Take on government contracts.** In the management challenge you can bid for new-line PPP, rail-plus-property and capacity projects, paid according to construction and operating performance.
+- **Complete compound goals.** New tasks combine network, coverage, operations, finance or development targets; the nine cities also offer 18 optional strategy challenges.
+- **Twelve analysis layers and four tools.** Including commute time, metro share, commercial development, distance measurement, line labels and task markers.
 - **Desktop and mobile.** Touch supports dragging and pinch zoom, with a dedicated phone layout.
 
 ## Screenshots
 
-The screenshots below are from the original **v2.2.0**.
+The screenshots below are from the original **v2.5.0**.
 
 ### Choose your city
 
-Each of the nine maps has an overview, city features and a phased timeline. Region and era filters can be dragged sideways.
+Each of the ten maps has an overview, city features and a phased timeline. Region and era filters can be dragged sideways.
 
-![Map selection: the nine maps, Hong Kong overview and historical phase timeline](./img/screenshot-map-selection.png)
+![Map selection: the ten maps, Hong Kong overview and historical phase timeline](./img/screenshot-map-selection.png)
 
 ### Tokyo: starting with the Ginza Line
 
@@ -92,17 +103,18 @@ Each grid cell is 250 m. Projections, roads and water for real cities come from 
 
 | Map | Grid | Extent (km) | Default start | Planning highlights |
 | --- | --- | --- | --- | --- |
-| Qingwan | 48×40 | 12×10 | 2000 | Fictional town, 12-step tutorial, unlimited funds |
+| Qingwan | 48×40 | 12×10 | 2000 | Fictional town, 13-step tutorial (about 12 minutes), unlimited funds |
 | Guangzhou | 120×144 | 30×36 | 1990 | Both banks of the Pearl River, old city and Tianhe, growth toward Panyu and University Town |
 | Hangzhou | 188×136 | 47×34 | 2000 | West Lake, Qiantang River, new cross-river districts and Xiaoshan Airport |
 | Hong Kong | 176×120 | 44×30 | 1970 | Mountainous harbor, new towns, reclamation and Chek Lap Kok Airport |
 | Taipei | 136×120 | 34×30 | 1990 | Basin, three rivers and polycentric growth |
+| Beijing | 204×156 | 51×39 | 1990 | Take over Line 1 and the loop line (29 stations), connect the ring roads, Olympic venues and the sub-center |
 | Tokyo | 140×132 | 35×33 | 1950 | Take over 18 Ginza Line stations, connect subcenters and Haneda Airport |
 | Shanghai | 152×152 | 38×38 | 1990 | Huangpu River, Pudong development, World Expo and Disneyland |
 | Wuhan | 152×156 | 38×39 | 2000 | Three towns on two rivers, East Lake, Optics Valley and Tianhe Airport |
 | Paris | 152×148 | 38×37 | 1900 | A century of urban change, cross-city commuting and two airports |
 
-All eight real cities support **Management Challenge** and **Free Build**, with currencies, fares and operating parameters for the city and era. Later real-world metro lines never appear automatically; every line is yours to plan.
+All nine real cities support **Management Challenge** and **Free Build**, with currencies, fares and operating parameters for the city and era. Later real-world metro lines never appear automatically; every line is yours to plan.
 
 ## Getting started
 
@@ -201,11 +213,13 @@ Keys can be changed in **Settings → Controls**; in-game hints update to match.
 | Action | Default |
 | --- | --- |
 | Pan / zoom | Left-drag, WASD / arrow keys; mouse wheel, `+` / `−` |
-| Tools | `V` Select · `B` Station · `L` Draw line · `E` Edit · `X` Demolish |
+| Tools | `V` Select · `B` Station · `L` Draw line · `E` Edit · `X` / `Delete` Demolish · `O` Measure |
 | Drawing lines | Click points in order; `Shift`+click adds a bend; right-click / `Enter` finishes |
+| Bulk demolish | In the demolish tool, `Ctrl`+click to multi-select, `Shift`+drag to box-select; `Enter` / `Delete` to apply |
 | Drafts | `Ctrl+Z` Undo · `Ctrl+Y` Redo · `Ctrl+Enter` Confirm construction |
 | Time | `Space` pause / resume; `1` / `2` / `3` / `4` change speed; `.` advance one month |
 | Views | `T` 2D / 2.5D · `U` Underground · `K` Network map · `F` Fit map |
+| Layers / immersive | `C` / `Shift+C` cycle analysis layers · `H` hide / show the interface |
 | Shortcuts | `/` Search · `J` Tasks · `G` Statistics · `Ctrl+S` Save · `F10` Settings |
 | Help / menu | `F1` Controls; `Esc` pauses and opens the menu, or cancels / goes back inside dialogs |
 
@@ -414,6 +428,13 @@ node scripts/build.mjs                 # Build dist/ and verify assets and manif
 node scripts/verify-game.mjs --dist    # Check dist/ matches game-manifest.json
 node scripts/test-map-migrations.mjs   # Map version migrations
 node scripts/test-v22.mjs              # v2.2 gameplay, save and rendering regressions
+node scripts/test-v23.mjs              # v2.3 regressions
+node scripts/test-v24.mjs              # v2.4 regressions
+node scripts/test-v25.mjs              # v2.5 contracts, fleet and compound-task regressions
+node scripts/test-v251.mjs             # v2.5.1 regressions
+node scripts/test-development-layer.mjs  # city development layer
+node scripts/test-save-storage.mjs     # browser save storage
+CM_BROWSER=<Chromium executable> node scripts/test-mobile-layout.mjs  # phone layout (needs Chromium)
 node scripts/test-web-sync.mjs         # Web edition integration regressions
 ```
 
