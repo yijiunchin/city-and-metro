@@ -22,6 +22,8 @@
     keys: {},             // 自定义物理键位
     recentColors: [],      // 最近使用的自定义线路颜色
     lineTags: false, taskPins: false,
+    speed: 1,             // 上次选用的运行倍速档位（1–4）；继续游戏、读档与新开局沿用（本修改版）
+    panelOpen: {},        // 详情与统计面板中各折叠区块的展开状态（本修改版）
   };
   let cur = Object.assign({}, DEF);
   try {
@@ -42,6 +44,16 @@
   if (!['auto', 'zh-CN', 'zh-TW', 'en'].includes(cur.language)) cur.language = 'auto';
   const recent = function (v) { return Array.isArray(v) ? v.filter(function (c) { return typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c); }).map(function (c) { return c.toLowerCase(); }).filter(function (c, i, a) { return a.indexOf(c) === i; }).slice(0, 8) : []; };
   cur.recentColors = recent(cur.recentColors);
+  const speedOk = function (v) { return Number.isInteger(v) && v >= 1 && v <= 4 ? v : 1; };
+  const openMap = function (v) {
+    const o = {};
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return o;
+    const ks = Object.keys(v).filter(function (k) { return typeof v[k] === 'boolean' && k.length <= 80; });
+    for (const k of ks.slice(-300)) o[k] = v[k];
+    return o;
+  };
+  cur.speed = speedOk(cur.speed);
+  cur.panelOpen = openMap(cur.panelOpen);
   if (!cur.keys || typeof cur.keys !== 'object' || Array.isArray(cur.keys)) cur.keys = {};
   const subs = [];
   function save() { try { localStorage.setItem(KEY, JSON.stringify(cur)); } catch (e) { /* ignore */ } }
@@ -56,6 +68,8 @@
       if (k === 'language' && !['auto', 'zh-CN', 'zh-TW', 'en'].includes(v)) v = 'auto';
       if (k === 'colorBlind' || k === 'immersive') v = v === true;
       if (k === 'recentColors') v = recent(v);
+      if (k === 'speed') v = speedOk(v);
+      if (k === 'panelOpen') v = openMap(v);
       if (cur[k] === v) return;
       cur[k] = v; save();
       Settings.apply(k);

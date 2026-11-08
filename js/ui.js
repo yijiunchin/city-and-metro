@@ -36,7 +36,7 @@
   function UI(R) {
     this.R = R;
     this.selection = null; this.layer = 'none'; this.highlightLine = null; this.hoverConflict = null;
-    this.stack = []; this.open = {}; this.live = [];
+    this.stack = []; this.open = Object.assign({}, CM.Settings.get('panelOpen')); this.live = [];
     this.save = { state: 'none', at: null, msg: '' };
     this._manualSaves = new Set();
     this._celebrationQueue = []; this._celebrationActive = null;
@@ -245,6 +245,7 @@
     }
     CM.Settings.on(function (k) {
       if (k === 'immersive') self.applyImmersive();
+      if (k === 'panelOpen') Object.assign(self.open, CM.Settings.get('panelOpen'));   // 云端同步带来的展开状态，下次渲染时生效
       if (k === 'grid' || k === 'gridSnap' || k === 'peakSlow') self.renderToolbar();
       if (k === 'uiScale') { self.layoutHud(); requestAnimationFrame(function () { self.renderToolbar(); }); }
       if (k === 'theme') { self.renderThemeBtns(); if (AX.enabled()) { self.renderDock(); if (self.stack.length) self.rerenderPage(); } }
@@ -1045,13 +1046,13 @@
     const g = this.g(); if (!g || g.jumping) return;
     s = U.clamp(s, 0, CFG.time.speeds.length);
     if (g.econ.failed && s > 0) { this.toast('经营挑战已失败，请选择后续操作', 'bad'); this.showFailure(g.econ.failed); return; }
-    if (s > 0) this.prevSpeed = s;
+    if (s > 0) CM.Settings.set('speed', s);   // 记住倍速：重新载入、读档或开新地图后继续游戏沿用
     if (s !== g.speed) snd(s === 0 ? 'pause' : 'play');
     const was = g.speed;
     g.setSpeed(s); this.renderToolbar();
     if (s === 0 && was > 0 && !this.isSaved()) this.scheduleAutosave();   // 暂停时自动保存当前进度
   };
-  UI.prototype.togglePause = function () { const g = this.g(); if (!g) return; this.setSpeed(g.speed > 0 ? 0 : (this.prevSpeed || 1)); };
+  UI.prototype.togglePause = function () { const g = this.g(); if (!g) return; this.setSpeed(g.speed > 0 ? 0 : (CM.Settings.get('speed') || 1)); };
   // 高峰慢放：设置长期保存；只改变高峰期间的时钟倍数，所选速度不变
   UI.prototype.togglePeakSlow = function () {
     const on = !CM.Settings.get('peakSlow');
@@ -1683,7 +1684,7 @@
     if (note && note.length > 36) {
       const key = 'lg-' + id, det = h('details', { class: 'lg-more' }, h('summary', null, ic('info', 13), '说明'), h('div', { class: 'note' }, note));
       if (self.open[key]) det.open = true;
-      det.addEventListener('toggle', function () { self.open[key] = det.open; });
+      det.addEventListener('toggle', function () { if (!!self.open[key] !== det.open) self.rememberOpen(key, det.open); });
       box.appendChild(det);
     } else if (note) box.appendChild(h('div', { class: 'note', style: { marginTop: '6px' } }, note));
     return box;
@@ -1821,6 +1822,13 @@
     if (top && top.kind === kind && top.id === id && !this.right.classList.contains('closed')) { this.renderPage(false); return; }
     this.openPage(kind, id, { replaceTop: this.topIs(['station', 'line', 'road', 'zone', 'facility']) });
   };
+  // 记住使用者手动展开或收起的区块（本修改版：写入设置，随帐号同步）
+  UI.prototype.rememberOpen = function (key, on) {
+    this.open[key] = on;
+    const m = Object.assign({}, CM.Settings.get('panelOpen'));
+    delete m[key]; m[key] = on;
+    CM.Settings.set('panelOpen', m);
+  };
   UI.prototype.sec = function (key, title, summary, bodyFn, defOpen, icon) {
     const open = this.open[key] !== undefined ? this.open[key] : !!defOpen;
     const wrap = h('div', { class: 'sec' + (open ? ' open' : '') });
@@ -1849,7 +1857,7 @@
         body.addEventListener('transitionend', te);
       }
       head.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-      self.open[key] = !isOpen;
+      self.rememberOpen(key, !isOpen);
     });
     wrap.append(head, body);
     return wrap;
